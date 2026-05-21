@@ -14,7 +14,7 @@
 
 
 ## Todo (AIのみ開発組織MVP: 2026-05-21)
-- [ ] Issue 1: Guardrails（やってはいけないこと）を定義する
+- [x] Issue 1: Guardrails（やってはいけないこと）を定義する
 - [ ] Issue 2: Roles（やるひと）を定義する
 - [ ] Issue 3: Workspace（作業場所）を定義する
 - [ ] Issue 4: Research Loop（情報収集）を定義する
@@ -30,7 +30,7 @@
 - [ ] P-0001: （例）Issueテンプレへ「提案欄」を追加し、改善提案の提出漏れを防ぐ
 
 ## In Progress
-- (none)
+- [ ] Guardrails運用1週レビュー（G-01〜G-08/A-01〜A-04の調整）
 
 ## Done
 - [x] Initialize self-hosting repository structure.
