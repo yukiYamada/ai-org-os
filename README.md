@@ -33,10 +33,14 @@ AI 開発組織を Git リポジトリとして定義し、運用可能にする
 
 ## リポジトリ構成
 
-- `org/`: 組織レベル定義
-- `teams/`: チーム定義（役割・運用・記憶）
-- `projects/`: ai-org-os の開発ターゲット
-- `templates/`: 新規チーム/プロジェクト作成テンプレート
+トップは **README + セグメントディレクトリ** を原則とする。
+
+- `L1_product-os-bundles/`: 学習済み開発集団OSセット（配布・移植可能成果物）
+- `L2_product-core-os/`: 本プロダクトのOSコア（規約・強制手段）
+- `L3_os-learning-records/`: OS運用で得た学習記録
+
+既存ディレクトリ（`org/`, `teams/`, `projects/`, `templates/`）は段階移行中のため当面併存。
+配置判断は `docs/information_architecture.md` を参照。
 
 ## 運用の最小サイクル
 
