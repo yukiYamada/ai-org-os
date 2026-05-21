@@ -30,10 +30,6 @@
 - [ ] Metrics Review を週次実行する
 - [ ] P-0001: （例）Issueテンプレへ「提案欄」を追加し、改善提案の提出漏れを防ぐ
 
-## In Progress
-- [ ] Guardrails運用1週レビュー（G-01〜G-08/A-01〜A-04の調整）
-- [ ] Roles運用1週レビュー（責務衝突/ハンドオフ詰まりの確認）
-- [ ] Workspace運用1週レビュー（staging経由率/差し戻し理由を確認）
 
 ## Done
 - [x] Initialize self-hosting repository structure.
