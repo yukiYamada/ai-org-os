@@ -27,7 +27,7 @@
 - 運用前提は「AI主導 + 人間最終承認」とする。
 
 ## Proposals (Bottom-up)
-- [ ] IA-SEG-01: L2候補（org/.githooks/rules）から1ファイル試験移動してリンク影響を確認
+- [x] IA-SEG-01: L2候補（org/.githooks/rules）から1ファイル試験移動してリンク影響を確認（`org/global_rules.md`）
 - [ ] IA-SEG-02: L3候補（projects/memory）から1ファイル試験移動して運用差分を記録
 - [ ] P-0002: 自己改善ループを週次で実行し、未達指標を30〜60分タスクへ再分解する
 - [ ] Metrics Review を週次実行する

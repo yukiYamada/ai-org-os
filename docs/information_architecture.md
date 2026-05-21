@@ -40,6 +40,11 @@
 - L3候補: `projects/` `teams/*/memory/`
 - L1候補: 現状なし（今後生成）
 
+## 試験移動の実施ログ
+
+- 2026-05-21: IA-4aとして `org/global_rules.md` を `L2_product-core-os/org/global_rules.md` へ試験移動。
+- 互換のため `org/global_rules.md` は移行案内のスタブを配置。
+
 ## 細分化タスク（変更量を抑えた段階適用）
 
 - IA-3a（30分）: 3セグメント直下READMEの初期文言をレビューして確定
