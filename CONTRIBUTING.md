@@ -19,3 +19,11 @@
 
 - この段階では公開コントリビューションフローは未整備です。
 - 正式な開発規約は今後の運用で確定します。
+
+
+## Guardrails強制（Git Hook）
+
+Guardrailsの実効性を上げるため、ローカルHookを利用します。
+
+- 初回設定: `git config core.hooksPath .githooks`
+- 詳細: `docs_guardrails_hooks.md`
