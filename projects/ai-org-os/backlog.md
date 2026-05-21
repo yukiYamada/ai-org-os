@@ -24,6 +24,9 @@
 - 旧Todo（charter/rules/roles/decision/retro/brief）は、Issue 1〜4で段階的に具体化して処理する。
 - 運用前提は「AI主導 + 人間最終承認」とする。
 
+## Proposals (Bottom-up)
+- [ ] P-0001: （例）Issueテンプレへ「提案欄」を追加し、改善提案の提出漏れを防ぐ
+
 ## In Progress
 - (none)
 
