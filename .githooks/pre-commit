@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Guardrails最小チェック（ドキュメント運用向け）
+# - 機密情報の平文コミット防止
+# - 1PR=1目的を意識した変更量上限の警告
+
+echo "[guardrails] pre-commit: チェック開始"
+
+# 1) 機密情報パターン（簡易）
+if git diff --cached --name-only | grep -Eq '.'; then
+  if git diff --cached | grep -E 'AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----' >/dev/null; then
+    echo "[guardrails][NG] 機密情報らしき文字列を検出。コミットを中断します。"
+    echo "[guardrails][HINT] G-05 機密情報の平文保存禁止（org/global_rules.md）"
+    exit 1
+  fi
+fi
+
+# 2) 変更ファイル数（強制ではなく警告）
+changed_count=$(git diff --cached --name-only | wc -l | tr -d ' ')
+if [ "${changed_count}" -gt 3 ]; then
+  echo "[guardrails][WARN] 変更ファイル数=${changed_count}（推奨: 3以下）"
+  echo "[guardrails][HINT] G-08 大粒変更の一括投入禁止。必要ならPR分割を検討してください。"
+fi
+
+echo "[guardrails] pre-commit: チェック完了"
