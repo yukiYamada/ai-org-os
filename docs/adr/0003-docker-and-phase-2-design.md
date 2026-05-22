@@ -8,7 +8,18 @@
 
 ## Status
 
-**Proposed** — 2026-05-22
+**Superseded by [ADR-0006](./0006-phase-5-realm-warden-guildmaster.md)** — 2026-05-23
+
+> 本 ADR は当初「Mind を Docker コンテナで分離する Phase 2」を Proposed していたが、
+> [ADR-0006](./0006-phase-5-realm-warden-guildmaster.md)（Phase 5 = Realm + Warden + Guildmaster）で
+> 「**Realm コンテナを 1 つ立てて、その中に Warden / Guildmaster / Mind をプロセスとして同居させる**」方針が採用された。
+> これは DinD (Docker in Docker) 回避と、Realm = 「ルール適用範囲」という Axiom（[ADR-0002](./0002-vocabulary-and-meta-meta-structure.md)）の自然な実装を両立させる選択。
+>
+> 結果として、Phase 2 で議論していた「Mind 単体の Docker 化（named volume での Mindspace 永続化、コンテナ間ネットワークでの分離など）」は **Phase 5 に統合**され、独立した Phase として走らない。
+>
+> ただし本 ADR の論点比較（ベースイメージ候補 / Compose vs 単体 docker run / API キーの渡し方 / Mindspace の volume vs bind mount / etc）は **将来 Mind 単体コンテナ化が再浮上した時の参照資料** として残す。
+
+### 2026-05-22 (Original) Proposed
 
 > 本 ADR は **設計のみ**。実装は本 ADR の承認後に着手する。
 > Accepted に昇格させるには「採用案」セクションの選択肢を絞り込む必要がある。
