@@ -13,7 +13,10 @@
 
 ## 次サイクル（L1 バンドル v0.2 以降）
 - [ ] **L1-V0.2-1**: カスタマイズポイント（差分マージ指針 / 置換すべき固有名詞 / 最小と推奨の境界）を `install.md` に明示
-- [ ] **L1-V0.2-2**: 起源と乖離が大きくなった際の「再スナップショット候補」検出を retrospective / Metrics Review に組み込む（D-0003 影響欄の次タスク化候補）
+- [x] **L1-V0.2-2**: 起源と乖離が大きくなった際の「再スナップショット候補」検出を retrospective / Metrics Review に組み込む（D-0003 影響欄の次タスク化候補）— 完了: `templates/team/memory/retrospectives.md` に「起源↔バンドル乖離チェック」を必須セクションとして追加、`teams/web-service-team/memory/retrospectives.md` R-0001 で運用開始
+- [ ] **L1-V0.2-3**: 起源↔バンドル diff の週次手動チェック手順を `projects/ai-org-os/specs/` または運用 doc に追記（R-0001 持ち越し）
+- [ ] **Metrics-Weekly-1**: 第1回 Metrics Weekly Log を翌週に記録し、5指標のうち取得不能なものを洗い出す（R-0001 持ち越し）
+- [ ] **DocHygiene-1**: 想定読者・Vision リンクの欠落を週次で grep スキャンする最小スクリプトを試作（R-0001 持ち越し）
 
 ## Todo（既存・Vision 軸を付与して保持）
 - [ ] Define organization charter.（→ 完了済み。`org/charter.md` を Vision 整合へ更新済）
