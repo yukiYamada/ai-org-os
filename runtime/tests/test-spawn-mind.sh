@@ -131,6 +131,26 @@ code=$?
 set -e
 assert_exit_code "duplicate name" 4 "${code}"
 
+echo "[case] 6. python が PATH に無いと exit 5（Nexus 接続不能を事前検知）"
+# Codex P2 (PR #23) 指摘の再発防止。
+# AI_ORG_OS_PYTHON に存在しないコマンドを指定し、command -v で弾かれることを検証。
+mind_no_py="${TEST_ID}-no-py"
+set +e
+AI_ORG_OS_PYTHON="definitely-not-a-real-binary-${TEST_ID}" \
+  "${SPAWN}" generic designer "${mind_no_py}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "missing python" 5 "${code}"
+# 副作用が起きていないこと: Mindspace が作られていないはず（早期失敗）
+if [ -d "${RUNTIME_DIR}/minds/${mind_no_py}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("missing python: Mindspace should not be created on failure")
+  echo "  [NG]   missing python: Mindspace was created despite failure"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   missing python: no Mindspace leaked"
+fi
+
 # ----- summary ---------------------------------------------------------------
 
 echo ""

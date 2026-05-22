@@ -3,20 +3,22 @@ Unit tests for Nexus storage layer.
 
 Standard library only (unittest, tempfile, pathlib). No MCP dependency.
 
-Run:
-  python -m unittest runtime.nexus.test_storage
-or:
+Run (any of these works from the repo root or from runtime/nexus):
+  python -m unittest discover runtime/nexus -p 'test_*.py'
   cd runtime/nexus && python -m unittest test_storage
 """
 
 from __future__ import annotations
 
-import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from storage import Nexus
+# Make `import storage` work no matter where unittest is invoked from.
+sys.path.insert(0, str(Path(__file__).parent))
+
+from storage import Nexus  # noqa: E402  — sys.path tweak must run first
 
 
 class NexusTestBase(unittest.TestCase):
@@ -93,6 +95,7 @@ class TestAckDispatch(NexusTestBase):
         msg_id = sent["msg_id"]
         ack = self.nexus.ack_dispatch(mind_name="b", msg_id=msg_id)
         self.assertTrue(ack["ok"])
+        self.assertFalse(ack.get("already_acked"))
         # inbox から消える
         result = self.nexus.read_inbox(mind_name="b")
         self.assertEqual(result["count"], 0)
@@ -101,6 +104,7 @@ class TestAckDispatch(NexusTestBase):
         self.assertTrue(archive_path.exists())
 
     def test_unknown_msg_returns_not_ok(self) -> None:
+        # Never existed in either inbox or archive.
         result = self.nexus.ack_dispatch(mind_name="b", msg_id="20260522T000000Z-a-deadbeef")
         self.assertFalse(result["ok"])
         self.assertIn("not found", result["error"])
@@ -108,6 +112,23 @@ class TestAckDispatch(NexusTestBase):
     def test_invalid_msg_id_raises(self) -> None:
         with self.assertRaises(ValueError):
             self.nexus.ack_dispatch(mind_name="b", msg_id="../../escape")
+
+    def test_double_ack_is_idempotent(self) -> None:
+        # Regression test for Codex P1 (PR #23): ack_dispatch must be safe to retry.
+        # MCP transport timeouts / client restarts may cause the same ack to be issued twice.
+        sent = self.nexus.send_dispatch(from_mind="a", to_mind="b", topic="t", body="x")
+        msg_id = sent["msg_id"]
+
+        # First ack: normal path.
+        first = self.nexus.ack_dispatch(mind_name="b", msg_id=msg_id)
+        self.assertTrue(first["ok"])
+        self.assertFalse(first.get("already_acked"))
+
+        # Second ack: must succeed as a no-op, not return ok=False.
+        second = self.nexus.ack_dispatch(mind_name="b", msg_id=msg_id)
+        self.assertTrue(second["ok"], f"second ack should be idempotent, got: {second}")
+        self.assertTrue(second.get("already_acked"))
+        self.assertEqual(first["archived_at"], second["archived_at"])
 
 
 class TestSecurityConstraints(NexusTestBase):

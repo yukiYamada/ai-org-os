@@ -54,6 +54,17 @@ if [ -d "${MIND_DIR}" ]; then
   exit 4
 fi
 
+# Phase 3: Nexus 接続のための python の存在を事前検証する。
+# 検証せずに .mcp.json を書くと、Mind 起動時 (claude 実行時) に MCP 接続が失敗して
+# 「spawn は成功したのに Nexus が使えない」という壊れた Mind が生まれる。
+PYTHON_BIN="${AI_ORG_OS_PYTHON:-python3}"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "[ERROR] python command '${PYTHON_BIN}' not found in PATH." >&2
+  echo "[HINT] Install Python 3.10+, or set AI_ORG_OS_PYTHON to your python path." >&2
+  echo "[HINT] Without python, the spawned Mind cannot start the Nexus MCP server." >&2
+  exit 5
+fi
+
 echo "[spawn-mind] Creating Mindspace: ${MIND_DIR}"
 mkdir -p "${MIND_DIR}"
 
@@ -77,9 +88,9 @@ EOF
 
 # Phase 3: Nexus (MCP server) への接続設定を Mindspace に配置
 # Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）
+# PYTHON_BIN は上方で存在検証済み。
 NEXUS_PY="${SCRIPT_DIR}/nexus/nexus.py"
-PYTHON_BIN="${AI_ORG_OS_PYTHON:-python3}"
-echo "[spawn-mind] Installing Nexus MCP config (.mcp.json)"
+echo "[spawn-mind] Installing Nexus MCP config (.mcp.json) using '${PYTHON_BIN}'"
 cat > "${MIND_DIR}/.mcp.json" <<JSON
 {
   "mcpServers": {

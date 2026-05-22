@@ -112,14 +112,31 @@ class Nexus:
         }
 
     def ack_dispatch(self, mind_name: str, msg_id: str) -> dict[str, Any]:
+        """Acknowledge a dispatch.
+
+        Idempotent: calling ack_dispatch on an already-archived message returns
+        ok=True with `already_acked=True`. This lets MCP clients safely retry
+        after transport timeouts without surfacing false errors.
+        """
         _validate_mind_name(mind_name, "mind_name")
         _validate_msg_id(msg_id)
         self._ensure_dirs()
         src = self.inbox_dir / mind_name / f"{msg_id}.md"
-        if not src.exists():
-            return {"ok": False, "error": f"message not found: {mind_name}/{msg_id}"}
         dst_dir = self.archive_dir / mind_name
-        dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / f"{msg_id}.md"
+
+        # Idempotency: if the message has already been archived, treat as success.
+        if dst.exists() and not src.exists():
+            return {
+                "ok": True,
+                "archived_at": str(dst),
+                "already_acked": True,
+            }
+
+        if not src.exists():
+            # Never existed (neither in inbox nor archive).
+            return {"ok": False, "error": f"message not found: {mind_name}/{msg_id}"}
+
+        dst_dir.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
-        return {"ok": True, "archived_at": str(dst)}
+        return {"ok": True, "archived_at": str(dst), "already_acked": False}
