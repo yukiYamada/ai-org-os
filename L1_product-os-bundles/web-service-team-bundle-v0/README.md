@@ -1,18 +1,20 @@
-# web-service-team-bundle v0 (骨子)
+# web-service-team-bundle v0.1
 
 > 想定読者: このバンドルを自社へ導入したい技術リード／テックリード。
 
 ## バンドル概要
 
-Web サービスドメインの小規模 AI 開発チームを、自社リポジトリで立ち上げるためのリファレンス実装バンドル。`teams/web-service-team/` の構成を「移植可能な配布物」として整えたもの。
+Web サービスドメインの小規模 AI 開発チームを、自社リポジトリで立ち上げるためのリファレンス実装バンドル。`teams/web-service-team/` および `templates/` の v0.1 時点スナップショット（snapshot model）。
 
-## 含まれるもの（予定）
+## 含まれるもの（v0.1）
 
 - `mission.md`: チームのミッションと判断軸
 - `rules.md`: チーム運用規約（org の global_rules を補完）
-- `roles/`: 役割定義（責務・権限・引き継ぎ条件）
 - `workflow.md`: 標準ワークフロー
-- 最小テンプレ（brief / レビュー / 議事）
+- `roles/`: 役割定義 6 ファイル（product_owner / architect / engineer / reviewer / retrospective_facilitator / planner_builder_reviewer_contract）
+- `templates/`: project brief、team mission/rules/workflow、role の各テンプレ
+
+詳細は `manifest.md` を参照。
 
 ## 含まれないもの
 
@@ -27,7 +29,7 @@ Web サービスドメインの小規模 AI 開発チームを、自社リポジ
 
 ## バージョン
 
-**v0**: 骨子のみ。実体ファイル（mission.md 等の本文）は未収録。実体は v0.1 で追加予定（`CHANGELOG.md` 参照）。
+**v0.1**: 実体ファイル 14 点を snapshot model で収録。差分マージ指針・カスタマイズポイントは v0.2 で明示予定。
 
 ## 関連
 

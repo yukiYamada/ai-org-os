@@ -5,11 +5,15 @@
 
 ## 最優先（Top Priority: L1 バンドル充填）
 **根拠**: Vision 上、L1 が空のままだとプロダクト価値ゼロ。骨子は v0 で配置済み、次は実体収録。
-- [ ] **L1-V0.1-1**: `teams/web-service-team/mission.md` をバンドルへ収録（Share）
-- [ ] **L1-V0.1-2**: `teams/web-service-team/rules.md` をバンドルへ収録（Maintain / Share）
-- [ ] **L1-V0.1-3**: `teams/web-service-team/roles/*` をバンドルへ収録（Build / Maintain）
-- [ ] **L1-V0.1-4**: `teams/web-service-team/workflow.md` をバンドルへ収録（Build / Maintain）
-- [ ] **L1-V0.1-5**: バンドルと本体の二重管理を防ぐ運用ルールを decisions.md に記録（Maintain）
+- [x] **L1-V0.1-1**: `teams/web-service-team/mission.md` をバンドルへ収録（Share）— v0.1 完了
+- [x] **L1-V0.1-2**: `teams/web-service-team/rules.md` をバンドルへ収録（Maintain / Share）— v0.1 完了
+- [x] **L1-V0.1-3**: `teams/web-service-team/roles/*` をバンドルへ収録（Build / Maintain）— v0.1 完了（6 ファイル）
+- [x] **L1-V0.1-4**: `teams/web-service-team/workflow.md` をバンドルへ収録（Build / Maintain）— v0.1 完了
+- [x] **L1-V0.1-5**: バンドルと本体の二重管理を防ぐ運用ルールを decisions.md に記録（Maintain）— D-0003（snapshot model）として確定
+
+## 次サイクル（L1 バンドル v0.2 以降）
+- [ ] **L1-V0.2-1**: カスタマイズポイント（差分マージ指針 / 置換すべき固有名詞 / 最小と推奨の境界）を `install.md` に明示
+- [ ] **L1-V0.2-2**: 起源と乖離が大きくなった際の「再スナップショット候補」検出を retrospective / Metrics Review に組み込む（D-0003 影響欄の次タスク化候補）
 
 ## Todo（既存・Vision 軸を付与して保持）
 - [ ] Define organization charter.（→ 完了済み。`org/charter.md` を Vision 整合へ更新済）
