@@ -1,7 +1,36 @@
-# Team Workflow Template
+## Team Workflow Template
 
-1. Planning
-2. Design
-3. Implement
-4. Review
-5. Retrospective
+> 想定読者: このチームを運用する AI/人間メンバー。各フェーズで「何を出すか」「誰に渡すか」を共有するために使う。
+
+各フェーズに以下 3 点を書く:
+- **入力**: このフェーズに入る時点で存在しているべき成果物
+- **出力**: このフェーズを抜けるときに完成しているべき成果物
+- **担当ロール**: 主担当ロール（`roles/role.md` で定義したもの）
+
+フェーズ間のハンドオフが切れると学習ループが回らないので、出力が次フェーズの入力になっているかを必ず確認する。
+
+1. **Planning**
+   <!-- 入力: 例) プロジェクト brief、優先度付き backlog / 出力: 例) 今サイクルのスコープと完了条件 / 担当: 例) PM ロール -->
+
+2. **Design**
+   <!-- 入力: 例) 1 のスコープ / 出力: 例) specs/requirements.md と specs/architecture.md の差分 / 担当: 例) Architect ロール -->
+
+3. **Implement**
+   <!-- 入力: 例) 2 の specs 差分 / 出力: 例) コード変更 + テスト / 担当: 例) Implementer ロール（AI 主、人間レビュー前提） -->
+
+4. **Review**
+   <!-- 入力: 例) 3 の差分 / 出力: 例) 承認 or 修正指示。人間承認ポイントはここに置く / 担当: 例) Reviewer ロール（人間必須かを明示） -->
+
+5. **Retrospective**
+   <!-- 入力: 例) 完了したサイクルの成果物と差分 / 出力: 例) 学習記録（L3 OS Learning Records への追記候補）、ルール/ワークフロー改善提案 / 担当: 例) チーム全員 + ファシリ役 -->
+
+<!--
+追記のヒント:
+- フェーズを増やすより、各フェーズの入出力を厳密にする方が効く。
+- Retrospective の出力が「次サイクルの Planning の入力」に戻る循環になっているかを毎回確認する。
+- 人間承認ポイントは Review に集約するか、各ロール定義（roles/role.md）に分散させる。
+-->
+
+---
+
+関連: [Product Vision](../../docs/product_vision.md) / [Team Mission](./mission.md) / [Team Rules](./rules.md)
