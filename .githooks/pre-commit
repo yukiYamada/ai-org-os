@@ -23,4 +23,28 @@ if [ "${changed_count}" -gt 3 ]; then
   echo "[guardrails][HINT] G-08 大粒変更の一括投入禁止。必要ならPR分割を検討してください。"
 fi
 
+# 3) 新規 Markdown ドキュメントに「想定読者」が含まれるかを警告
+# - 運営原則 7. Reader-Aware Documentation に対応
+# - 対象: 新規追加された .md ファイル（テンプレ・MEMORY・CHANGELOG・LICENSE 等は除外）
+new_md_files=$(git diff --cached --name-only --diff-filter=A | grep -E '\.md$' || true)
+for f in ${new_md_files}; do
+  case "${f}" in
+    templates/*|*/CHANGELOG.md|*/MEMORY.md|LICENSE*) continue ;;
+  esac
+  if [ -f "${f}" ]; then
+    head -n 10 "${f}" | grep -qE '想定読者|Audience|Target reader' || {
+      echo "[guardrails][WARN] 新規ドキュメント '${f}' の冒頭10行に「想定読者」が見つかりません。"
+      echo "[guardrails][HINT] 運営原則 7. Reader-Aware Documentation（org/operating_principles.md）"
+    }
+  fi
+done
+
+# 4) docs/product_vision.md を変更する場合は decisions.md 記録の有無を警告
+if git diff --cached --name-only | grep -q '^docs/product_vision.md$'; then
+  if ! git diff --cached --name-only | grep -q 'memory/decisions.md$'; then
+    echo "[guardrails][WARN] product_vision.md を変更していますが、decisions.md の更新が含まれていません。"
+    echo "[guardrails][HINT] Vision 更新は意思決定の記録（背景/選択肢/決定/影響）が必要です。"
+  fi
+fi
+
 echo "[guardrails] pre-commit: チェック完了"

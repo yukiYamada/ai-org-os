@@ -1,16 +1,27 @@
 # Backlog
 
-## Todo
-- [ ] Define organization charter.
-- [ ] Define global rules.
-- [ ] Define web-service-team mission.
-- [ ] Define role responsibilities.
-- [ ] Define decision log format.
-- [ ] Define retrospective format.
-- [ ] Define project brief format.
-- [ ] Define how team-local rules improve over time.
-- [ ] Define criteria for extracting/transferring a team.
-- [ ] Decide the first executable feature after the documentation structure is stable.
+> 想定読者: プロジェクト進行を判断する Planner / Reviewer / 意思決定者。
+> 全タスクは [Product Vision](../../docs/product_vision.md) の3軸（Build / Maintain / Share）のいずれかに寄与すること。
+
+## 最優先（Top Priority: L1 バンドル充填）
+**根拠**: Vision 上、L1 が空のままだとプロダクト価値ゼロ。骨子は v0 で配置済み、次は実体収録。
+- [ ] **L1-V0.1-1**: `teams/web-service-team/mission.md` をバンドルへ収録（Share）
+- [ ] **L1-V0.1-2**: `teams/web-service-team/rules.md` をバンドルへ収録（Maintain / Share）
+- [ ] **L1-V0.1-3**: `teams/web-service-team/roles/*` をバンドルへ収録（Build / Maintain）
+- [ ] **L1-V0.1-4**: `teams/web-service-team/workflow.md` をバンドルへ収録（Build / Maintain）
+- [ ] **L1-V0.1-5**: バンドルと本体の二重管理を防ぐ運用ルールを decisions.md に記録（Maintain）
+
+## Todo（既存・Vision 軸を付与して保持）
+- [ ] Define organization charter.（→ 完了済み。`org/charter.md` を Vision 整合へ更新済）
+- [ ] Define global rules.（→ 完了済。`L2_product-core-os/org/global_rules.md`）
+- [ ] Define web-service-team mission.（→ 完了済。Vision 整合化済）
+- [ ] Define role responsibilities.（→ 完了済。`teams/web-service-team/roles/`）
+- [ ] Define decision log format.（Maintain）
+- [ ] Define retrospective format.（Maintain）
+- [ ] Define project brief format.（→ 完了済。テンプレ Vision 整合化済）
+- [ ] Define how team-local rules improve over time.（Maintain）
+- [ ] Define criteria for extracting/transferring a team.（Share）
+- [ ] Decide the first executable feature after the documentation structure is stable.（Build）
 
 
 ## Todo (AIのみ開発組織MVP: 2026-05-21)
@@ -25,6 +36,7 @@
 ## 整合メモ（AI主導開発組織MVP）
 - 旧Todo（charter/rules/roles/decision/retro/brief）は、Issue 1〜4で段階的に具体化して処理する。
 - 運用前提は「AI主導 + 人間最終承認」とする。
+- **2026-05-22 ビジョン整合バッチ**: 全文書を `docs/product_vision.md`（3軸: Build/Maintain/Share）に整合させる一括修正を実施。詳細は `reports/2026-05-22_vision_alignment.md`。
 
 ## Proposals (Bottom-up)
 - [x] IA-SEG-01: L2候補（org/.githooks/rules）から1ファイル試験移動してリンク影響を確認（`org/global_rules.md`）
