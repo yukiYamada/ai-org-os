@@ -33,15 +33,24 @@ runtime/nexus/storage/
 
 ### B. 手動で動作確認（開発時のみ）
 
-```bash
-# 依存（mcp パッケージ）をインストール
-pip install -r runtime/nexus/requirements.txt
+`runtime/nexus/start.sh` を使うと **venv に閉じ込めて起動**できる（ホスト Python 環境を汚さない）。
 
-# 起動（stdio で待ち受け）
+```bash
+# 起動（venv 自動作成 + 依存インストール + stdio サーバー起動）
+./runtime/nexus/start.sh
+
+# 依存だけ準備して起動はしない
+./runtime/nexus/start.sh --setup-only
+
+# venv を作り直す（依存更新時など）
+./runtime/nexus/start.sh --recreate-venv
+
+# venv なしで直接（自己責任）
+pip install -r runtime/nexus/requirements.txt
 python runtime/nexus/nexus.py
 ```
 
-stdio なので、MCP クライアント（Claude Code 等）からサブプロセスとして起動する想定。
+stdio なので、MCP クライアント（Claude Code 等）からサブプロセスとして起動する想定。`start.sh` で起動した場合は別ターミナルから接続することになる。
 
 ## セキュリティ方針
 
