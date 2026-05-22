@@ -31,6 +31,26 @@ KIND="$1"
 PERSONA="$2"
 MIND_NAME="$3"
 
+# Argument validation (regression test for Codex P2 on PR #27).
+# Reject inputs that contain characters which would either:
+#   - break the JSON we emit into .mcp.json (e.g. " or \), making MCP startup fail silently
+#   - allow path traversal when used to look up runtime/kinds/<KIND>.md etc.
+# The pattern matches storage.py's _validate_mind_name so the host-side and
+# the Python-side rules stay consistent.
+_VALID_NAME_RE='^[A-Za-z0-9._-]{1,64}$'
+validate_arg() {
+  local arg_label="$1"
+  local arg_value="$2"
+  if [[ ! "${arg_value}" =~ ${_VALID_NAME_RE} ]]; then
+    echo "[ERROR] Invalid ${arg_label}: '${arg_value}'" >&2
+    echo "[HINT] Must match ${_VALID_NAME_RE} (no quotes, backslashes, spaces, path separators)" >&2
+    exit 6
+  fi
+}
+validate_arg "kind" "${KIND}"
+validate_arg "persona" "${PERSONA}"
+validate_arg "mind-name" "${MIND_NAME}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIND_FILE="${SCRIPT_DIR}/kinds/${KIND}.md"
 PERSONA_FILE="${SCRIPT_DIR}/personas/${PERSONA}.md"

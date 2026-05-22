@@ -134,6 +134,71 @@ code=$?
 set -e
 assert_exit_code "duplicate name" 4 "${code}"
 
+echo "[case] 7. 不正な引数は exit 6（Codex P2 PR #27 指摘の再発防止）"
+# 不正な MIND_NAME のさまざまな失敗パターン。
+# spawn-mind.sh は KIND/PERSONA/MIND_NAME すべてに validate_arg を適用する。
+# JSON injection 防止（"abc / a"b / a\b）、path traversal 防止（../escape）、
+# 制御文字防止（タブ、空文字、空白）、長さ上限（65 字超）を 1 つずつ確認。
+
+# パターン 1: JSON 文字を含む mind-name
+set +e
+"${SPAWN}" generic designer 'a"b' >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "mind-name with double quote" 6 "${code}"
+
+# パターン 2: バックスラッシュ含む
+set +e
+"${SPAWN}" generic designer 'a\b' >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "mind-name with backslash" 6 "${code}"
+
+# パターン 3: パストラバーサル
+set +e
+"${SPAWN}" generic designer '../escape' >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "mind-name with path traversal" 6 "${code}"
+
+# パターン 4: 空白を含む
+set +e
+"${SPAWN}" generic designer 'a b' >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "mind-name with space" 6 "${code}"
+
+# パターン 5: 空文字
+set +e
+"${SPAWN}" generic designer '' >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "empty mind-name" 6 "${code}"
+
+# パターン 6: 長さ超過（65 字）
+long_name="$(printf 'a%.0s' {1..65})"
+set +e
+"${SPAWN}" generic designer "${long_name}" >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "mind-name too long (65)" 6 "${code}"
+
+# パターン 7: KIND も検証されること
+set +e
+"${SPAWN}" '../etc' designer "${TEST_ID}-vkind" >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "kind with path traversal" 6 "${code}"
+
+# パターン 8: PERSONA も検証されること
+set +e
+"${SPAWN}" generic 'a"b' "${TEST_ID}-vpersona" >/dev/null 2>&1; code=$?
+set -e
+assert_exit_code "persona with double quote" 6 "${code}"
+
+# パターン 9: 早期失敗の確認（Mindspace が作られていない）
+if [ -d "${RUNTIME_DIR}/minds/${TEST_ID}-vkind" ] || [ -d "${RUNTIME_DIR}/minds/${TEST_ID}-vpersona" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("invalid args: Mindspace should not be created")
+  echo "  [NG]   invalid args: Mindspace was created despite failure"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   invalid args: no Mindspace leaked"
+fi
+
 echo "[case] 6. python が PATH に無いと exit 5（Nexus 接続不能を事前検知）"
 # Codex P2 (PR #23) 指摘の再発防止。
 # AI_ORG_OS_PYTHON に存在しないコマンドを指定し、command -v で弾かれることを検証。
