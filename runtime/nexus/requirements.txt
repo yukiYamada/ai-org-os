@@ -1,0 +1,3 @@
+# Nexus dependencies — keep minimal for security (npm/pypi ecosystem incidents).
+# Only the official MCP Python SDK. Everything else uses the standard library.
+mcp>=1.0

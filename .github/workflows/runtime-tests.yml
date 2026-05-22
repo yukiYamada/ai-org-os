@@ -20,6 +20,13 @@ jobs:
       - name: checkout
         uses: actions/checkout@v4
 
+      - name: setup python
+        # Phase 3 で Nexus (Python MCP server) を導入。
+        # storage 層と E2E は標準ライブラリのみで動くため mcp パッケージは CI 不要。
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: chmod scripts
         # Windows でコミットされた実行ビットが落ちている可能性に備えて。
         run: |
