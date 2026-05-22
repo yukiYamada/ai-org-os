@@ -34,7 +34,7 @@
 - [x] Issue 3: Workspace（作業場所）を定義する
 - [x] Issue 4: Research Loop（情報収集）を定義する
 - [x] Epic DoD: 4 Issueを30〜90分タスクで実行開始する
-- [ ] Issue 5: Metrics（状態監視）を定義する
+- [x] Issue 5: Metrics（状態監視）を定義する — projects/ai-org-os/specs/metrics.md に集約
 - [ ] Issue 6: Information Architecture（Starter/Governance/Runtime Memory 分離）を運用開始する
 
 ## 整合メモ（AI主導開発組織MVP）

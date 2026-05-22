@@ -1,6 +1,8 @@
 # Workflow
 
 ## 標準フロー
+<!-- CUSTOMIZE: role-naming | "Product Owner / Architect / Engineer / Reviewer" を社内呼称へ。例: PM / TL / SWE / QA -->
+<!-- CUSTOMIZE: metrics-threshold | 下記 Metrics Review の各指標に自社目標値を設定。例: 自立実行率 70%, 手戻り率 15% 以下 -->
 1. Product Owner が課題を定義（`brief.md`, `backlog.md`）
 2. Architect が要件・構成を具体化（`specs/`）
 3. Engineer が実装（`src/`）

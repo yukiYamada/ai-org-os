@@ -29,6 +29,14 @@
 
 既存ディレクトリ（`org/`, `teams/`, `projects/`, `templates/`）は段階移行中のため当面併存します。配置判断は [docs/information_architecture.md](docs/information_architecture.md) を参照。
 
+## Quick Start（3分で試す）
+
+1. **バンドルを見る**: [`L1_product-os-bundles/web-service-team-bundle-v0/`](L1_product-os-bundles/web-service-team-bundle-v0/) を開き、`README.md` と `install.md` に目を通す（3分）
+2. **自社リポジトリへ展開する**: [`install.md`](L1_product-os-bundles/web-service-team-bundle-v0/install.md) の5ステップ手順に沿って、自社の Git リポジトリへバンドルを適用する
+3. **カスタマイズする**: [`customize.md`](L1_product-os-bundles/web-service-team-bundle-v0/customize.md) の Must 項目を自社向けに置換し、最初の PR を出す
+
+詳しい移植手順は [`L1_product-os-bundles/web-service-team-bundle-v0/install.md`](L1_product-os-bundles/web-service-team-bundle-v0/install.md) を参照してください。
+
 ## ドッグフーディング原則
 
 - 本リポジトリ自身による開発は、ツールの**検証手段であって目的ではありません**。
@@ -53,10 +61,10 @@
 
 ## 現在の状態
 
-- 本リポジトリは初期構造のみを提供
-- L1 バンドル第一弾のリファレンス実装として `web-service` ドメインを想定（未充填）
-- アプリケーション本体（DB/認証/課金/オーケストレーション等）は非ゴール
-- まずは運営構造を固定し、ai-org-os 自身の開発で検証する
+- L1 バンドル第一弾 `web-service-team-bundle-v0` を **v0.2** として提供中（実体14ファイル収録、カスタマイズガイド付き）
+- L2 コア規約（charter / global_rules / operating_principles）整備済み、Vision-First / Reader-Aware Documentation を原則化
+- L3 学習ループは ai-org-os 自身の開発記録として蓄積中
+- 非ゴール: アプリ本体実装（DB / 認証 / 課金 / オーケストレーター）
 
 ---
 
