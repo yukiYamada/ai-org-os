@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# spawn-mind.sh — Mind を 1 個起動する最小スクリプト（Phase 1）
+# spawn-mind.sh — Mind を 1 個起動する最小スクリプト（Phase 1 + Phase 3）
 #
 # 用法:
 #   ./runtime/spawn-mind.sh <kind> <persona> <mind-name>
@@ -8,11 +8,11 @@
 # 例:
 #   ./runtime/spawn-mind.sh generic designer my-first-mind
 #
-# Phase 1 の仕様:
-#   - Docker / Realm / Warden / Nexus はまだなし
+# 仕様:
 #   - Mindspace = ホスト上のディレクトリ runtime/minds/<mind-name>/
 #   - Persona の内容を CLAUDE.md として配置
-#   - Claude CLI を起動する場所まで（実起動は人間が手で確認する）
+#   - Nexus（MCP server）への接続設定 .mcp.json を Mindspace に配置（Phase 3 で追加）
+#   - その後 cd して claude を起動すれば、Nexus 経由で他 Mind と Dispatch できる
 #
 # Phase 2 以降:
 #   - Docker コンテナで起動
@@ -66,19 +66,38 @@ mind_name: ${MIND_NAME}
 kind: ${KIND}
 persona: ${PERSONA}
 spawned_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-phase: 1
+phase: 1+3
 ---
 
 # Mind metadata
 
-このファイルは Phase 1 の暫定的なメタデータです。
-Phase 2 以降は Warden がより構造化された形で管理します。
+このファイルは暫定的なメタデータです。
+Phase 5 以降は Warden がより構造化された形で管理します。
 EOF
+
+# Phase 3: Nexus (MCP server) への接続設定を Mindspace に配置
+# Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）
+NEXUS_PY="${SCRIPT_DIR}/nexus/nexus.py"
+PYTHON_BIN="${AI_ORG_OS_PYTHON:-python3}"
+echo "[spawn-mind] Installing Nexus MCP config (.mcp.json)"
+cat > "${MIND_DIR}/.mcp.json" <<JSON
+{
+  "mcpServers": {
+    "nexus": {
+      "type": "stdio",
+      "command": "${PYTHON_BIN}",
+      "args": ["${NEXUS_PY}"]
+    }
+  }
+}
+JSON
 
 echo "[spawn-mind] Mind '${MIND_NAME}' is ready at ${MIND_DIR}"
 echo ""
-echo "Next step (manual, Phase 1):"
+echo "Next step (manual):"
 echo "  cd ${MIND_DIR}"
-echo "  claude   # or 'claude code' depending on your CLI"
+echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
 echo ""
-echo "The Mind's CLAUDE.md (=its Persona) will be loaded automatically."
+echo "Nexus が提供する tool:"
+echo "  - send_dispatch / read_inbox / ack_dispatch"
+echo "  Mind は他 Mind の Mindspace を直接触れません。すべての通信は Nexus 経由です（Axiom）。"

@@ -113,12 +113,15 @@ assert_exit_code "happy path" 0 "${code}"
 mind_dir="${RUNTIME_DIR}/minds/${mind}"
 assert_file_exists "Mindspace CLAUDE.md" "${mind_dir}/CLAUDE.md"
 assert_file_exists "Mindspace .mind-meta.md" "${mind_dir}/.mind-meta.md"
+assert_file_exists "Mindspace .mcp.json (Nexus 接続)" "${mind_dir}/.mcp.json"
 assert_files_equal "CLAUDE.md == designer Persona" \
   "${mind_dir}/CLAUDE.md" \
   "${RUNTIME_DIR}/personas/designer.md"
 assert_file_contains "meta has mind_name" "${mind_dir}/.mind-meta.md" "mind_name: ${mind}"
 assert_file_contains "meta has kind" "${mind_dir}/.mind-meta.md" "kind: generic"
 assert_file_contains "meta has persona" "${mind_dir}/.mind-meta.md" "persona: designer"
+assert_file_contains ".mcp.json references nexus server" "${mind_dir}/.mcp.json" '"nexus"'
+assert_file_contains ".mcp.json references nexus.py" "${mind_dir}/.mcp.json" "nexus.py"
 
 echo "[case] 5. 既存 Mind 名は exit 4（不可侵: 上書き禁止）"
 # ケース 4 で作った Mind を再利用して衝突を起こす
