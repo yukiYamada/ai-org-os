@@ -38,18 +38,63 @@ def _gen_msg_id(sender: str) -> str:
     return f"{ts}-{sender}-{rand}"
 
 
-class Nexus:
-    """Storage-level Nexus. The MCP wiring in nexus.py delegates to this class."""
+class AuthorizationError(Exception):
+    """Identity binding violation (Issue #19, ADR-0008).
 
-    def __init__(self, storage_dir: Path | str | None = None) -> None:
+    Raised when a Nexus bound to one Mind identity is asked to act on behalf
+    of another. Intentionally distinct from the built-in PermissionError so
+    that OS-level filesystem permission failures (read-only mount, bad
+    ownership) are NOT misreported as authorization denials.
+    (Codex P2 PR #27 follow-up.)
+    """
+    pass
+
+
+class Nexus:
+    """Storage-level Nexus. The MCP wiring in nexus.py delegates to this class.
+
+    Identity binding (Issue #19, ADR-0008):
+      If ``identity`` is set (typically from the AI_ORG_OS_MIND_NAME environment
+      variable when the Nexus is launched as a stdio subprocess of a single Mind),
+      the Nexus will reject any operation that does not match this identity.
+      This prevents one Mind from impersonating another Mind via crafted arguments.
+
+      When ``identity`` is None (e.g. unit tests, HTTP transport for multi-tenant
+      use cases), all operations are allowed regardless of from_mind / mind_name.
+    """
+
+    def __init__(
+        self,
+        storage_dir: Path | str | None = None,
+        identity: str | None = None,
+    ) -> None:
         base = Path(storage_dir) if storage_dir is not None else DEFAULT_STORAGE_DIR
         self.storage_dir = base.resolve()
         self.inbox_dir = self.storage_dir / "inbox"
         self.archive_dir = self.storage_dir / "archive"
+        # When identity is provided, validate its shape so it cannot be a path traversal etc.
+        if identity is not None:
+            _validate_mind_name(identity, "identity")
+        self.identity = identity
 
     def _ensure_dirs(self) -> None:
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def _authorize(self, claimed: str, field: str) -> None:
+        """Raise AuthorizationError if the caller is bound to an identity and it
+        disagrees with the claimed mind_name / from_mind.
+
+        Note: this raises AuthorizationError (ai-org-os domain exception), NOT
+        the built-in PermissionError. OS-level fs permission failures from
+        write_text / read_text / rename keep raising PermissionError and stay
+        distinguishable for callers (Codex P2 PR #27 follow-up).
+        """
+        if self.identity is not None and claimed != self.identity:
+            raise AuthorizationError(
+                f"forbidden: this Nexus session is bound to mind '{self.identity}', "
+                f"but {field}='{claimed}' was requested"
+            )
 
     # ---- operations ----------------------------------------------------------
 
@@ -66,6 +111,7 @@ class Nexus:
             raise ValueError("topic must be a non-empty string")
         if not isinstance(body, str):
             raise ValueError("body must be a string")
+        self._authorize(from_mind, "from_mind")
         self._ensure_dirs()
 
         msg_id = _gen_msg_id(from_mind)
@@ -93,6 +139,7 @@ class Nexus:
 
     def read_inbox(self, mind_name: str) -> dict[str, Any]:
         _validate_mind_name(mind_name, "mind_name")
+        self._authorize(mind_name, "mind_name")
         self._ensure_dirs()
         inbox = self.inbox_dir / mind_name
         if not inbox.exists():
@@ -120,6 +167,7 @@ class Nexus:
         """
         _validate_mind_name(mind_name, "mind_name")
         _validate_msg_id(msg_id)
+        self._authorize(mind_name, "mind_name")
         self._ensure_dirs()
         src = self.inbox_dir / mind_name / f"{msg_id}.md"
         dst_dir = self.archive_dir / mind_name

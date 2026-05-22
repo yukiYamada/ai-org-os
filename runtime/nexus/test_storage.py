@@ -18,7 +18,7 @@ from pathlib import Path
 # Make `import storage` work no matter where unittest is invoked from.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from storage import Nexus  # noqa: E402  — sys.path tweak must run first
+from storage import AuthorizationError, Nexus  # noqa: E402  — sys.path tweak must run first
 
 
 class NexusTestBase(unittest.TestCase):
@@ -141,6 +141,91 @@ class TestSecurityConstraints(NexusTestBase):
     def test_long_mind_name_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self.nexus.read_inbox(mind_name="a" * 65)
+
+
+class TestIdentityBinding(unittest.TestCase):
+    """Issue #19 / ADR-0008: identity binding prevents Mind impersonation.
+
+    Each Nexus session can be bound to a single Mind name (typically via the
+    AI_ORG_OS_MIND_NAME env var). All operations whose mind_name / from_mind
+    does not match the bound identity are rejected with PermissionError.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_dir = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_invalid_identity_rejected_at_init(self) -> None:
+        with self.assertRaises(ValueError):
+            Nexus(storage_dir=self.tmp_dir, identity="../escape")
+
+    def test_unbound_nexus_accepts_any_mind(self) -> None:
+        # 既存挙動の維持（identity=None で誰の名前でも OK）。
+        nx = Nexus(storage_dir=self.tmp_dir)
+        result = nx.send_dispatch(from_mind="anyone", to_mind="other", topic="t", body="x")
+        self.assertTrue(result["ok"])
+
+    def test_bound_nexus_accepts_matching_from_mind(self) -> None:
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        result = nx.send_dispatch(from_mind="alice", to_mind="bob", topic="t", body="x")
+        self.assertTrue(result["ok"])
+
+    def test_bound_nexus_rejects_impersonation_in_send(self) -> None:
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        with self.assertRaises(AuthorizationError) as ctx:
+            nx.send_dispatch(from_mind="bob", to_mind="carol", topic="t", body="x")
+        self.assertIn("alice", str(ctx.exception))
+        self.assertIn("bob", str(ctx.exception))
+        # AuthorizationError must NOT be the built-in PermissionError, so that
+        # callers can distinguish identity denials from fs-level permission errors
+        # (Codex P2 PR #27 follow-up).
+        self.assertNotIsInstance(ctx.exception, PermissionError)
+
+    def test_bound_nexus_rejects_reading_other_inbox(self) -> None:
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        with self.assertRaises(AuthorizationError):
+            nx.read_inbox(mind_name="bob")
+
+    def test_bound_nexus_accepts_reading_own_inbox(self) -> None:
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        result = nx.read_inbox(mind_name="alice")
+        self.assertTrue(result["ok"])
+
+    def test_bound_nexus_rejects_acking_other_message(self) -> None:
+        # alice's session cannot ack messages addressed to bob.
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        with self.assertRaises(AuthorizationError):
+            nx.ack_dispatch(mind_name="bob", msg_id="20260523T000000Z-x-deadbeef")
+
+    def test_bound_nexus_can_ack_own_message_end_to_end(self) -> None:
+        # alice sends to bob; bob's session acks it. Two distinct bound sessions.
+        nx_alice = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx_bob = Nexus(storage_dir=self.tmp_dir, identity="bob")
+
+        sent = nx_alice.send_dispatch(from_mind="alice", to_mind="bob", topic="t", body="hi")
+        msg_id = sent["msg_id"]
+
+        # bob can read his own inbox.
+        inbox = nx_bob.read_inbox(mind_name="bob")
+        self.assertEqual(inbox["count"], 1)
+
+        # bob can ack his own message.
+        ack = nx_bob.ack_dispatch(mind_name="bob", msg_id=msg_id)
+        self.assertTrue(ack["ok"])
+
+        # alice CANNOT ack bob's message (impersonation guard).
+        with self.assertRaises(AuthorizationError):
+            nx_alice.ack_dispatch(mind_name="bob", msg_id=msg_id)
+
+    def test_auth_error_is_distinct_from_builtin_permission_error(self) -> None:
+        # Codex P2 (PR #27 follow-up): AuthorizationError must NOT be a subclass
+        # of built-in PermissionError, so callers and `except` clauses can
+        # distinguish identity denials from OS-level fs permission errors.
+        self.assertFalse(issubclass(AuthorizationError, PermissionError))
+        self.assertTrue(issubclass(AuthorizationError, Exception))
 
 
 if __name__ == "__main__":
