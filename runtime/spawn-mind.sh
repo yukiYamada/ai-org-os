@@ -89,15 +89,24 @@ EOF
 # Phase 3: Nexus (MCP server) への接続設定を Mindspace に配置
 # Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）
 # PYTHON_BIN は上方で存在検証済み。
+#
+# AI_ORG_OS_MIND_NAME env var binds the Nexus stdio subprocess to this Mind's
+# identity (Issue #19, ADR-0008). The Nexus then rejects send_dispatch /
+# read_inbox / ack_dispatch calls whose from_mind / mind_name does not match
+# this binding, preventing one Mind from impersonating another via crafted
+# arguments.
 NEXUS_PY="${SCRIPT_DIR}/nexus/nexus.py"
-echo "[spawn-mind] Installing Nexus MCP config (.mcp.json) using '${PYTHON_BIN}'"
+echo "[spawn-mind] Installing Nexus MCP config (.mcp.json) using '${PYTHON_BIN}', bound to '${MIND_NAME}'"
 cat > "${MIND_DIR}/.mcp.json" <<JSON
 {
   "mcpServers": {
     "nexus": {
       "type": "stdio",
       "command": "${PYTHON_BIN}",
-      "args": ["${NEXUS_PY}"]
+      "args": ["${NEXUS_PY}"],
+      "env": {
+        "AI_ORG_OS_MIND_NAME": "${MIND_NAME}"
+      }
     }
   }
 }

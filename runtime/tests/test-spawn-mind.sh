@@ -122,6 +122,9 @@ assert_file_contains "meta has kind" "${mind_dir}/.mind-meta.md" "kind: generic"
 assert_file_contains "meta has persona" "${mind_dir}/.mind-meta.md" "persona: designer"
 assert_file_contains ".mcp.json references nexus server" "${mind_dir}/.mcp.json" '"nexus"'
 assert_file_contains ".mcp.json references nexus.py" "${mind_dir}/.mcp.json" "nexus.py"
+# Issue #19 (ADR-0008): .mcp.json must bind the Nexus session to this Mind's identity.
+assert_file_contains ".mcp.json binds AI_ORG_OS_MIND_NAME" "${mind_dir}/.mcp.json" "AI_ORG_OS_MIND_NAME"
+assert_file_contains ".mcp.json binds the correct mind name" "${mind_dir}/.mcp.json" "${mind}"
 
 echo "[case] 5. 既存 Mind 名は exit 4（不可侵: 上書き禁止）"
 # ケース 4 で作った Mind を再利用して衝突を起こす
