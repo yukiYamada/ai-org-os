@@ -14,6 +14,9 @@ runtime/
 │   └── designer.md ← 試験 Persona: 設計用
 ├── minds/          ← 生成された Mind 実体（=Mindspace）
 │   └── .gitkeep
+├── tests/          ← 自前 shell テスト（依存ゼロ）
+│   ├── run-tests.sh
+│   └── test-spawn-mind.sh
 └── spawn-mind.sh   ← Mind を1個起動する最小スクリプト
 ```
 
@@ -31,7 +34,25 @@ runtime/
 ./runtime/spawn-mind.sh generic designer my-first-mind
 ```
 
-これで `runtime/minds/my-first-mind/` が作られ、Persona の内容が `CLAUDE.md` として配置され、Claude が起動する（予定）。
+これで `runtime/minds/my-first-mind/` が作られ、Persona の内容が `CLAUDE.md` として配置される。続けて：
+
+```bash
+cd runtime/minds/my-first-mind
+claude
+```
+
+で、Persona を装着した Mind が起動する。
+
+## テスト
+
+依存ゼロの自前 shell テスト：
+
+```bash
+./runtime/tests/run-tests.sh
+```
+
+各 `test-*.sh` を順に実行し、PASS/FAIL を表示する。1 つでも失敗があれば exit 1。
+（GitHub Actions での自動実行は別 PR で予定）
 
 ## 次のフェーズ予定
 
