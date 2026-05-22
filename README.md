@@ -1,71 +1,32 @@
 # ai-org-os
 
-> 想定読者: 自社で AI 開発チームを立ち上げたい／他者へ共有・提供したい事業会社の意思決定者・リード・テックリード。
+> 想定読者: このリポジトリに到達した全員。
 
-**ai-org-os は、メンテナンス性の高い自社開発 AI チームを構築し、共有可能にするツールです。**
+**State: Reset (2026-05-22)**
 
-これからは自社開発が AI 駆動で加速する時代であり、自社開発能力そのものが事業資産になります。本ツールは、その能力を Git リポジトリ上の運営構造として表現・運用・移植できるようにします。単発のコード生成ツール、LLM ラッパー、開発外注プラットフォームではありません。
+本リポジトリは、プロダクトの本質定義を一度リセットしました。**新方向**は「開発組織の不変項（公理系）を定義するフレームワーク」です。詳細は ADR-0001 を参照してください。
 
-詳細なビジョンは [docs/product_vision.md](docs/product_vision.md) を参照してください。
+- 方向性: [`docs/adr/0001-ai-org-os-as-invariant-framework.md`](docs/adr/0001-ai-org-os-as-invariant-framework.md)
+- 過去成果物: [`OLD/`](OLD/) 配下に全アーカイブ済み（参照可。新方向と整合しない部分は捨てる前提）
 
-## 対象ユーザー
+## このリポジトリは何か（壁打ち後の現在地）
 
-- **第一義**: 自社開発を加速させたい事業会社の意思決定者・リード・テックリード
-- **第二義**: 自社の AI 開発組織を他者へ提供する立場の人（コンサル、エージェンシー、社内プラットフォームチーム）
+ai-org-os は、「**開発組織とは、どんな思考が揃った集合か**」の不変項（外せない部分）を定義するフレームワークです。
 
-## 提供価値（3軸）
+- 組織は**思考のネットワーク**として捉えます
+- 各思考の実装（AI / 人間の脳 / 将来的なデバイス）は問いません
+- 「人間」というカテゴリは組織内に存在しません
+- 比喩: **Claude Code の組織版**。Claude Code が AI エージェント単体のハーネスを定義するのと同じレイヤーで、組織単位の動作を定義します
 
-1. **Build（構築）**: 自社の AI 開発チームを最小ステップで立ち上げられる
-2. **Maintain（メンテナンス）**: 立ち上げた AI チームを継続運用・自己改善できる構造を持つ
-3. **Share（共有・移植）**: 構築・改善した AI チームを、他社・他プロジェクトへ移植可能な成果物として配布できる
+## 次にやること（再構築）
 
-## 成果物のかたち（L1/L2/L3）
+1. 不変項（Level 0〜4 試案）を練り直す
+2. 各不変項の最低限の条件を明文化
+3. コア語彙の定義（思考 / 組織 / 境界 / 記憶 等）
+4. 必要に応じて DSL（Markdown 規約）を設計
 
-| 層 | ディレクトリ | 役割 |
-|---|---|---|
-| **L1: Product OS Bundles** | `L1_product-os-bundles/` | 移植可能な「学習済み AI 開発チームのバンドル」（このツールの直接的な商品） |
-| **L2: Product Core OS** | `L2_product-core-os/` | コア規約・強制手段（メンテナンス性を担保する基盤） |
-| **L3: OS Learning Records** | `L3_os-learning-records/` | 運用で得た判断・学習・改善履歴（学習ループが回っている証拠） |
+詳細な経緯と論点は ADR-0001 を参照してください。
 
-既存ディレクトリ（`org/`, `teams/`, `projects/`, `templates/`）は段階移行中のため当面併存します。配置判断は [docs/information_architecture.md](docs/information_architecture.md) を参照。
+## ライセンス
 
-## Quick Start（3分で試す）
-
-1. **バンドルを見る**: [`L1_product-os-bundles/web-service-team-bundle-v0/`](L1_product-os-bundles/web-service-team-bundle-v0/) を開き、`README.md` と `install.md` に目を通す（3分）
-2. **自社リポジトリへ展開する**: [`install.md`](L1_product-os-bundles/web-service-team-bundle-v0/install.md) の5ステップ手順に沿って、自社の Git リポジトリへバンドルを適用する
-3. **カスタマイズする**: [`customize.md`](L1_product-os-bundles/web-service-team-bundle-v0/customize.md) の Must 項目を自社向けに置換し、最初の PR を出す
-
-詳しい移植手順は [`L1_product-os-bundles/web-service-team-bundle-v0/install.md`](L1_product-os-bundles/web-service-team-bundle-v0/install.md) を参照してください。
-
-## ドッグフーディング原則
-
-- 本リポジトリ自身による開発は、ツールの**検証手段であって目的ではありません**。
-- 最初のマイルストーンは、Git ベースの AI 開発組織が自分自身の開発を管理できることを実証することです。
-- 人間は承認・説明責任・実行環境の提供を担い、AI チームは役割・ルール・記憶に基づいて開発を進めます。
-
-## 設計方針
-
-- 永続化の第一層は Git
-- 構造は Markdown 中心（AI が読み取り・更新しやすい）
-- ルールは「全体」と「チーム局所」に分離
-- チームはレトロスペクティブでローカルルールを進化可能
-- 移植可能なバンドル（L1）出力を前提とする
-
-## 運用の最小サイクル
-
-1. `projects/ai-org-os/brief.md` と `backlog.md` を更新
-2. Architect が `projects/ai-org-os/specs/` を更新
-3. Engineer が実装し、Reviewer が検証
-4. 重要判断を `teams/*/memory/decisions.md` に追記
-5. スプリント後に `retrospectives.md` と `learnings.md` を更新し、必要なら `teams/*/rules.md` を改定
-
-## 現在の状態
-
-- L1 バンドル第一弾 `web-service-team-bundle-v0` を **v0.2** として提供中（実体14ファイル収録、カスタマイズガイド付き）
-- L2 コア規約（charter / global_rules / operating_principles）整備済み、Vision-First / Reader-Aware Documentation を原則化
-- L3 学習ループは ai-org-os 自身の開発記録として蓄積中
-- 非ゴール: アプリ本体実装（DB / 認証 / 課金 / オーケストレーター）
-
----
-
-関連: [Product Vision](docs/product_vision.md) / [Information Architecture](docs/information_architecture.md) / [Roadmap](docs/roadmap.md) / [FAQ](docs/faq.md)
+[LICENSE](LICENSE) を参照。
