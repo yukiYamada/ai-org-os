@@ -1,4 +1,4 @@
-# Manifest: web-service-team-bundle v0.1
+# Manifest: web-service-team-bundle v0.2
 
 > 想定読者: バンドル受領者、およびバンドル出荷側のコントリビュータ。
 
@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | `README.md` | バンドル概要・前提条件 | Build / Share | — | 収録済み |
 | `install.md` | 自社リポジトリへの移植手順 | Build / Share | — | 収録済み |
+| `customize.md` | カスタマイズガイド（Must / Should / May、置換マーカーの読み方） | Build | — | **v0.2 収録済み** |
 | `manifest.md` | 本ファイル。構成定義 | Share | — | 収録済み |
 | `CHANGELOG.md` | バージョン履歴 | Maintain | — | 収録済み |
 | `mission.md` | チームのミッション・判断軸 | Build / Maintain | `teams/web-service-team/mission.md` | **v0.1 収録済み** |
@@ -30,6 +31,7 @@
 - 実体ファイルは v0.1 リリース時点（2026-05-22）の起源パス（上表）のスナップショット。
 - 起源側の更新は自動同期されない。次バージョン（v0.2 以降）で再スナップショットを取る運用（snapshot model）。
 - 詳細な根拠は本リポジトリの `teams/web-service-team/memory/decisions.md` の **D-0003** を参照。
+- カスタマイズマーカーは各実体ファイル内 `<!-- CUSTOMIZE: ... -->` 形式で埋め込まれている（v0.2 で追加）。読み方は `customize.md` を参照。
 
 ## ファイル内の相対リンクについて
 
