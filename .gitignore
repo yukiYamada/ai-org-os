@@ -41,3 +41,7 @@ coverage/
 
 # Runtime artifacts
 *.pid
+
+# ai-org-os: generated Mind instances (Mindspaces). Not committed; lifecycle is managed by runtime.
+runtime/minds/*
+!runtime/minds/.gitkeep
