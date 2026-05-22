@@ -8,16 +8,22 @@
 
 ```
 runtime/
-├── kinds/          ← Kind の定義（Mind の Body 性能）
-│   └── generic.md  ← 当面唯一の Kind: Generic
-├── personas/       ← Persona の定義（思考の癖）
-│   └── designer.md ← 試験 Persona: 設計用
-├── minds/          ← 生成された Mind 実体（=Mindspace）
+├── kinds/              ← Kind の定義（Mind の Body 性能）
+│   └── generic.md      ← 当面唯一の Kind: Generic
+├── personas/           ← Persona の定義（思考の癖）
+│   ├── designer.md     ← 設計用
+│   ├── implementer.md  ← 実装用
+│   └── reviewer.md     ← レビュー用
+├── minds/              ← 生成された Mind 実体（=Mindspace）
 │   └── .gitkeep
-├── tests/          ← 自前 shell テスト（依存ゼロ）
+├── tests/              ← 自前 shell テスト（依存ゼロ）
 │   ├── run-tests.sh
-│   └── test-spawn-mind.sh
-└── spawn-mind.sh   ← Mind を1個起動する最小スクリプト
+│   ├── test-spawn-mind.sh
+│   ├── test-kill-mind.sh
+│   └── test-list-minds.sh
+├── spawn-mind.sh       ← Mind を spawn する
+├── kill-mind.sh        ← Mind を破棄する（Mindspace ごと消える）
+└── list-minds.sh       ← spawn 中の Mind を一覧する
 ```
 
 ## 現在のフェーズ
@@ -28,20 +34,24 @@ runtime/
 - Mind の起動 = Claude（CLI）をそのディレクトリで起動
 - Kind / Persona の選択 = `spawn-mind.sh` の引数
 
-## 使い方（仮）
+## 使い方
 
 ```bash
+# Mind を spawn
 ./runtime/spawn-mind.sh generic designer my-first-mind
-```
 
-これで `runtime/minds/my-first-mind/` が作られ、Persona の内容が `CLAUDE.md` として配置される。続けて：
+# 一覧
+./runtime/list-minds.sh
+# NAME              KIND       PERSONA      SPAWNED_AT
+# my-first-mind     generic    designer     2026-05-22T11:09:51Z
 
-```bash
+# Persona 装着済みで起動（Phase 1 では手動）
 cd runtime/minds/my-first-mind
 claude
-```
 
-で、Persona を装着した Mind が起動する。
+# 破棄（Mindspace ごと消える、不可逆）
+./runtime/kill-mind.sh my-first-mind
+```
 
 ## テスト
 
@@ -52,7 +62,7 @@ claude
 ```
 
 各 `test-*.sh` を順に実行し、PASS/FAIL を表示する。1 つでも失敗があれば exit 1。
-（GitHub Actions での自動実行は別 PR で予定）
+GitHub Actions でも `runtime/**` 変更時に自動実行される（`.github/workflows/runtime-tests.yml`）。
 
 ## 次のフェーズ予定
 

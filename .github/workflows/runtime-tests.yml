@@ -1,0 +1,33 @@
+name: runtime tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-tests.yml'
+  pull_request:
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-tests.yml'
+
+jobs:
+  test:
+    name: runtime/tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: chmod scripts
+        # Windows でコミットされた実行ビットが落ちている可能性に備えて。
+        run: |
+          chmod +x runtime/spawn-mind.sh
+          chmod +x runtime/kill-mind.sh
+          chmod +x runtime/list-minds.sh
+          chmod +x runtime/tests/run-tests.sh
+          chmod +x runtime/tests/test-*.sh
+
+      - name: run runtime tests
+        run: ./runtime/tests/run-tests.sh
