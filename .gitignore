@@ -56,3 +56,4 @@ runtime/nexus/storage/archive/*
 *.pyc
 __pycache__/
 *.egg-info/
+runtime/nexus/.venv/

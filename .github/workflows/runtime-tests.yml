@@ -33,8 +33,13 @@ jobs:
           chmod +x runtime/spawn-mind.sh
           chmod +x runtime/kill-mind.sh
           chmod +x runtime/list-minds.sh
+          chmod +x runtime/nexus/start.sh
           chmod +x runtime/tests/run-tests.sh
           chmod +x runtime/tests/test-*.sh
 
       - name: run runtime tests
+        env:
+          # venv 作成 + pip install を伴うテストは CI ではスキップ
+          # （ネットワークと時間の節約、test-nexus-start.sh が SKIP_VENV_TESTS を見る）
+          SKIP_VENV_TESTS: '1'
         run: ./runtime/tests/run-tests.sh
