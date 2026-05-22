@@ -38,6 +38,18 @@ def _gen_msg_id(sender: str) -> str:
     return f"{ts}-{sender}-{rand}"
 
 
+class AuthorizationError(Exception):
+    """Identity binding violation (Issue #19, ADR-0008).
+
+    Raised when a Nexus bound to one Mind identity is asked to act on behalf
+    of another. Intentionally distinct from the built-in PermissionError so
+    that OS-level filesystem permission failures (read-only mount, bad
+    ownership) are NOT misreported as authorization denials.
+    (Codex P2 PR #27 follow-up.)
+    """
+    pass
+
+
 class Nexus:
     """Storage-level Nexus. The MCP wiring in nexus.py delegates to this class.
 
@@ -70,11 +82,16 @@ class Nexus:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
     def _authorize(self, claimed: str, field: str) -> None:
-        """Raise PermissionError if the caller is bound to an identity and it
+        """Raise AuthorizationError if the caller is bound to an identity and it
         disagrees with the claimed mind_name / from_mind.
+
+        Note: this raises AuthorizationError (ai-org-os domain exception), NOT
+        the built-in PermissionError. OS-level fs permission failures from
+        write_text / read_text / rename keep raising PermissionError and stay
+        distinguishable for callers (Codex P2 PR #27 follow-up).
         """
         if self.identity is not None and claimed != self.identity:
-            raise PermissionError(
+            raise AuthorizationError(
                 f"forbidden: this Nexus session is bound to mind '{self.identity}', "
                 f"but {field}='{claimed}' was requested"
             )

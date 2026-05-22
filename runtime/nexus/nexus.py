@@ -31,7 +31,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from storage import Nexus
+from storage import AuthorizationError, Nexus
 
 # Identity binding (Issue #19, ADR-0008):
 #   When spawn-mind.sh launches this Nexus as a stdio subprocess for a single
@@ -115,12 +115,17 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
             result = {"ok": False, "error": f"unknown tool: {name}"}
     except KeyError as exc:
         result = {"ok": False, "error": f"missing argument: {exc.args[0]}"}
-    except PermissionError as exc:
-        # Identity binding violation (Issue #19): caller tried to impersonate another Mind.
+    except AuthorizationError as exc:
+        # Identity binding violation (Issue #19, ADR-0008).
+        # Domain-specific exception so callers can distinguish from OS-level
+        # PermissionError raised by underlying fs operations
+        # (Codex P2 PR #27 follow-up).
         result = {"ok": False, "error": str(exc), "code": "forbidden"}
     except ValueError as exc:
         result = {"ok": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
+        # Includes built-in PermissionError (fs-level), OSError, etc.
+        # These are infrastructure failures, NOT authorization denials.
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
 
