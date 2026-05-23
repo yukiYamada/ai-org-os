@@ -68,9 +68,14 @@ runtime/
 # 一覧
 ./runtime/pillars/lifecycle/list-minds.sh
 
-# Mind を起動（CLAUDE.md = Persona と .mcp.json = Nexus 接続が自動読み込み）
+# Mind を起動 (方式A: 手動) — CLAUDE.md = Persona と .mcp.json = Nexus 接続が自動読み込み
 cd runtime/minds/my-first-mind
 claude
+
+# Mind を起動 (方式B: 外側ループ、ADR-0010) — spawn と同時に loop を立ち上げる
+./runtime/pillars/lifecycle/spawn-mind.sh --start-loop generic designer my-second-mind
+# あるいは既存 Mind に対して
+./runtime/pillars/lifecycle/mind-loop.sh my-second-mind
 # Mind の中で Claude が send_dispatch / read_inbox / ack_dispatch を呼べる
 
 # 破棄（Mindspace ごと消える、不可逆）

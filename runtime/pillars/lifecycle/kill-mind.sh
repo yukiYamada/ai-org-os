@@ -39,6 +39,31 @@ if [ ! -d "${MIND_DIR}" ]; then
   exit 2
 fi
 
+# Phase 5a-2 / ADR-0010: 外側ループが動いていれば先に停止する。
+# pid file に書かれた PID に SIGTERM を送り、最大 5 秒待ってから SIGKILL に上げる。
+# pid file が無いか、PID が既に死んでいれば skip。
+PID_FILE="${MIND_DIR}/.mind-loop.pid"
+if [ -f "${PID_FILE}" ]; then
+  LOOP_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${LOOP_PID}" ] && kill -0 "${LOOP_PID}" 2>/dev/null; then
+    echo "[kill-mind] Stopping mind-loop (pid ${LOOP_PID})"
+    kill -TERM "${LOOP_PID}" 2>/dev/null || true
+    # graceful 終了を待つ
+    WAITED=0
+    while [ "${WAITED}" -lt 5 ]; do
+      if ! kill -0 "${LOOP_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+      WAITED=$((WAITED + 1))
+    done
+    if kill -0 "${LOOP_PID}" 2>/dev/null; then
+      echo "[kill-mind] Loop did not stop in 5s, sending SIGKILL"
+      kill -KILL "${LOOP_PID}" 2>/dev/null || true
+    fi
+  fi
+fi
+
 echo "[kill-mind] Destroying Mind '${MIND_NAME}' (Mindspace at ${MIND_DIR})"
 rm -rf "${MIND_DIR}"
 echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace is irrecoverable."
