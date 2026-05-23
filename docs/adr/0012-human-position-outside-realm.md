@@ -10,6 +10,11 @@
 
 **Accepted** — 2026-05-23
 
+## パス参照に関する注記
+
+本 ADR で参照する `runtime/pillars/*` 配下のパス（`spawn-mind.sh` / `observe.py` 等）は **Phase 5a-2 / PR #56（Issue #37）の物理移動で配置される** ものを前提とする。
+PR #56 マージ前は同等ファイルが旧位置（`runtime/spawn-mind.sh` / `runtime/observatory/observe.py` 等）に存在し、本 ADR の決定はどちらの配置でも有効。レビュー時点でファイルが見つからない場合は ADR-0011 のマッピングを参照のこと。
+
 ## Context（背景）
 
 ADR-0002 で「**人間というカテゴリは組織内に存在しない**」と決め、ADR-0010 で「Warden = 世界そのもの／機能の集合体」「Mind には観測上の制約がある」を確定した。
@@ -89,7 +94,7 @@ ADR-0002 / ADR-0010 の「人間 = 組織内に存在しない」を **「人間
 | **GitHub PR / CODEOWNERS** | 人間 → ai-org-os コア | `.github/CODEOWNERS`（ADR-0011） | Phase 5a-2 で導入済 |
 | **Realm Lifecycle**（docker compose up/down） | 人間 → Realm 起動・停止 | `runtime/realm/docker-compose.yml` | Phase 5a-1 で導入済 |
 | **Inbox Pillar** | 人間 → Warden（Issue / Dispatch 投入） | `runtime/pillars/inbox/`（仮） | Phase 5a-5（#40） |
-| **Observation の人間向け出力** | Warden → 人間 | `runtime/pillars/observation/observe.py` | Phase 5a-2 で導入済 |
+| **Observation の人間向け出力** | Warden → 人間 | `runtime/pillars/observation/observe.py`（Phase 5a-2 / #56 で配置、旧 `runtime/observatory/observe.py`） | Phase 5a-2 で実装 |
 | **致命的失敗の通知** | Warden → 人間 | 未定義 | Phase 5b 以降（#47） |
 
 **Mind が人間と直接やり取りすることはない**（境界経由ですらない）。Mind から見える人間の作用は、すべて Inbox Pillar が Warden 経由で取り次いだ Dispatch として現れる。これは ADR-0010「Mind の Axiom 制約」と整合する。
