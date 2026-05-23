@@ -66,14 +66,14 @@ if [ "${code}" = "0" ]; then
   # `docker exec ... /path/to/script` だと permission denied (exit 126) になるので、
   # 明示的に bash 経由で起動する。
   set +e
-  docker exec ai-org-os-realm bash /realm/runtime/list-minds.sh >/dev/null 2>&1
+  docker exec ai-org-os-realm bash /realm/runtime/pillars/lifecycle/list-minds.sh >/dev/null 2>&1
   rc=$?
   set -e
   assert_ok "list-minds.sh execution" "${rc}"
 
   echo "[case] 3. コンテナ内で observe.py が動く"
   set +e
-  out=$(docker exec ai-org-os-realm python3 /realm/runtime/observatory/observe.py 2>&1)
+  out=$(docker exec ai-org-os-realm python3 /realm/runtime/pillars/observation/observe.py 2>&1)
   rc=$?
   set -e
   assert_ok "observe.py execution" "${rc}"

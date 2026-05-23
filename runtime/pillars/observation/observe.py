@@ -2,12 +2,12 @@
 """
 Realm Observatory CLI.
 
-Walks runtime/minds/ and runtime/nexus/storage/ to produce a current snapshot
+Walks runtime/minds/ and runtime/pillars/conduit/storage/ to produce a current snapshot
 of all spawned Minds with status / category. Standard library only.
 
 Usage:
-  python3 runtime/observatory/observe.py
-  python3 runtime/observatory/observe.py --json   # machine-readable
+  python3 runtime/pillars/observation/observe.py
+  python3 runtime/pillars/observation/observe.py --json   # machine-readable
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 """
@@ -20,10 +20,13 @@ import sys
 import time
 from pathlib import Path
 
-# Locate runtime root from this file's path: runtime/observatory/observe.py
-RUNTIME_DIR = Path(__file__).resolve().parent.parent
+# Locate runtime root from this file's path: runtime/pillars/observation/observe.py
+# Phase 5a-2: 本ファイルは runtime/pillars/observation/ 配下。runtime/ ルートに
+# 戻るには parent を 3 つ遡る必要がある（observation -> pillars -> runtime）。
+RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
 MINDS_DIR = RUNTIME_DIR / "minds"
-NEXUS_STORAGE = RUNTIME_DIR / "nexus" / "storage"
+# Phase 5a-2: Nexus は Conduit Pillar に移動 (runtime/pillars/conduit/storage/)。
+NEXUS_STORAGE = RUNTIME_DIR / "pillars" / "conduit" / "storage"
 INBOX_DIR = NEXUS_STORAGE / "inbox"
 ARCHIVE_DIR = NEXUS_STORAGE / "archive"
 

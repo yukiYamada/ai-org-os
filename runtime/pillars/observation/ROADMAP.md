@@ -1,4 +1,4 @@
-# Warden Observation Pillar ロードマップ（旧 `runtime/observatory/`）
+# Warden Observation Pillar ロードマップ（旧 `runtime/pillars/observation/`）
 
 > 想定読者:
 > - **Observation Pillar**（Warden の観測機能）を次に拡張する担当
@@ -14,13 +14,13 @@
 
 ### `observe.py` は Observation Pillar の暫定実装
 
-[ADR-0010](../../docs/adr/0010-observation-philosophy-and-warden-as-collective.md) で **Observatory は Warden 機能の一部**、[ADR-0011](../../docs/adr/0011-warden-claude-naming-and-separation.md) で **Warden 機能の構成要素は Pillar と呼ぶ** ことが確定。従って **`runtime/observatory/observe.py` は「Observation Pillar の暫定実装」** である。本 ROADMAP は Pillar の進化計画として読む：
+[ADR-0010](../../../docs/adr/0010-observation-philosophy-and-warden-as-collective.md) で **Observatory は Warden 機能の一部**、[ADR-0011](../../../docs/adr/0011-warden-claude-naming-and-separation.md) で **Warden 機能の構成要素は Pillar と呼ぶ** ことが確定。従って **`runtime/pillars/observation/observe.py` は「Observation Pillar の暫定実装」** である。本 ROADMAP は Pillar の進化計画として読む：
 
 | 旧理解 | 新理解（ADR-0010 / ADR-0011） |
 |---|---|
 | Observatory = 単独の観測ツール | **Observation Pillar = Warden の自己認識機能** |
 | ROADMAP = ツールの機能拡張 | **ROADMAP = Pillar が持つべき責務の段階的実装** |
-| `runtime/observatory/` 配下で完結 | Phase 5a-2 で **`runtime/pillars/observation/` に移動** |
+| `runtime/pillars/observation/` 配下で完結 | Phase 5a-2 で **`runtime/pillars/observation/` に移動** |
 | Phase 5 で Warden に「組み込む」 | Phase 5a で Warden の **構成要素として正式に位置づけ**（=吸収シナリオ） |
 
 ### 観測の 2 種類（ADR-0010 §4 の再掲）
@@ -35,13 +35,13 @@
 
 ### Phase 5a での Warden 吸収シナリオ
 
-[ADR-0006](../../docs/adr/0006-phase-5-realm-warden-guildmaster.md) Accepted、[ADR-0011](../../docs/adr/0011-warden-claude-naming-and-separation.md) の Pillar 配置に基づき、以下のタイムラインで Observation Pillar を Warden に統合する：
+[ADR-0006](../../../docs/adr/0006-phase-5-realm-warden-guildmaster.md) Accepted、[ADR-0011](../../../docs/adr/0011-warden-claude-naming-and-separation.md) の Pillar 配置に基づき、以下のタイムラインで Observation Pillar を Warden に統合する：
 
 | 段階 | やること | 関連 Issue |
 |---|---|---|
-| **現状（Phase 3 + α）** | `runtime/observatory/observe.py` が暫定実装として独立して動く | — |
-| **Phase 5a-1** | Realm コンテナ起動。Observation Pillar はまだ `runtime/observatory/` に居る（参照のみ） | #35 |
-| **Phase 5a-2** | `runtime/observatory/` → `runtime/pillars/observation/` に **物理移動**、編集不可機構を適用 | #37 |
+| **現状（Phase 3 + α）** | `runtime/pillars/observation/observe.py` が暫定実装として独立して動く | — |
+| **Phase 5a-1** | Realm コンテナ起動。Observation Pillar はまだ `runtime/pillars/observation/` に居る（参照のみ） | #35 |
+| **Phase 5a-2** | `runtime/pillars/observation/` → `runtime/pillars/observation/` に **物理移動**、編集不可機構を適用 | #37 |
 | **Phase 5a-3** | Judgment Pillar から Observation Pillar の API を Python import で呼ぶ経路を確立 | #38（仮） |
 | **Phase 5b 以降** | Mind 向け観測 API（Axiom 制約付き）を Conduit Pillar（Nexus）の MCP tool として公開 | 未起票 |
 
@@ -51,13 +51,13 @@
 
 ## 1. 現状（できていること）の整理
 
-PR #28 〜 #50 系列で `runtime/observatory/` は以下を達成済み。本機能は **Warden 不在時の代替実装**（ADR-0010 §8）として位置づけられる。
+PR #28 〜 #50 系列で `runtime/pillars/observation/` は以下を達成済み。本機能は **Warden 不在時の代替実装**（ADR-0010 §8）として位置づけられる。
 
 | 観測軸 | 実装 | 出典 | Warden 観点での意義 |
 |---|---|---|---|
 | **メタ情報**（kind / persona / spawned_at） | `runtime/minds/<name>/.mind-meta.md` をパース | `observe.py` `_read_meta` / `_epoch_from_iso` | Registry Pillar の前段 |
 | **活動状態**（mtime ベースの 3 値 status） | Mindspace 配下の最新 `mtime` から `active` / `waiting` / `idle` を判定 | `mind_status.calc_status`、しきい値 5min / 1h | 「外形」観測（ADR-0010 §3：Mind の内面状態ではない） |
-| **メッセージ件数**（inbox / archive） | `runtime/nexus/storage/{inbox,archive}/<name>/*.md` の件数集計 | `observe.py` `_count_messages` | Conduit Pillar のフロー観測の入り口 |
+| **メッセージ件数**（inbox / archive） | `runtime/pillars/conduit/storage/{inbox,archive}/<name>/*.md` の件数集計 | `observe.py` `_count_messages` | Conduit Pillar のフロー観測の入り口 |
 | **優先度カテゴリ**（5 値） | status × unread の組み合わせから `attention` / `running` / `unread` / `stale` / `read` を導出 | `mind_status.calc_category` | Warden / 人間運用者向けトリアージ材料 |
 | **出力フォーマット** | 人間向け表 + 機械向け JSON（`--json`） | `observe.py` `_format_table` / `_format_json` | JSON は将来 Judgment Pillar が直接消費 |
 | **依存** | Python 標準ライブラリのみ | ADR-0005 / ADR-0009 整合 | Pillar 共通方針 |
@@ -237,15 +237,15 @@ ADR-0010 §4 で「Mind の観測は Axiom 制約下」と確定。Pillar とし
 ## 4. 推奨ロードマップ（4 段階、Warden 機能としての進化）
 
 各段階は **1 PR 1 段階** を原則とする。各 PR が独立して merge 可能で、merge 後も既存 CLI が動く（後方互換）こと。
-**v0.1 〜 v0.3 は `runtime/observatory/` のまま実装、v1.0 で `runtime/pillars/observation/` に移動**（Phase 5a-2 と連動）。
+**v0.1 〜 v0.3 は `runtime/pillars/observation/` のまま実装、v1.0 で `runtime/pillars/observation/` に移動**（Phase 5a-2 と連動）。
 
 ### Observation Pillar v0.1: 履歴記録（スナップショット定期保存）
 
 **Warden 観点の責務**: 時系列観測の基盤（変化観測能力）を獲得する。
 
 **スコープ**:
-1. `runtime/observatory/snapshot.py` 新設。`observe.py` の `gather_observations()` を呼んで JSON 1 ファイルに保存
-2. 保存先: `runtime/observatory/snapshots/<UTC timestamp>.json`（Phase 5a-2 で `runtime/pillars/observation/snapshots/` に移動予定）
+1. `runtime/pillars/observation/snapshot.py` 新設。`observe.py` の `gather_observations()` を呼んで JSON 1 ファイルに保存
+2. 保存先: `runtime/pillars/observation/snapshots/<UTC timestamp>.json`（Phase 5a-2 で `runtime/pillars/observation/snapshots/` に移動予定）
 3. `observe.py --snapshot` フラグで「出力 + 保存」を 1 アクションに
 4. 古いスナップショットを保持する TTL（例: 7 日）を設定可能に（パージは別コマンド `prune`、自動削除はしない）
 5. テスト: `test_snapshot.py` で保存 / 読み戻し / ID 重複 / TTL prune の安全性
@@ -263,10 +263,10 @@ ADR-0010 §4 で「Mind の観測は Axiom 制約下」と確定。Pillar とし
 **Warden 観点の責務**: Conduit Pillar 連携（フロー観測）と、リソース管理機能の入力データを揃える。
 
 **スコープ**:
-1. `runtime/observatory/dispatch_flow.py` 新設。`runtime/nexus/storage/{inbox,archive}/<to>/*.md` を全件走査、frontmatter の `from`/`to`/`sent_at` だけ読む（本文は読まない）
+1. `runtime/pillars/observation/dispatch_flow.py` 新設。`runtime/pillars/conduit/storage/{inbox,archive}/<to>/*.md` を全件走査、frontmatter の `from`/`to`/`sent_at` だけ読む（本文は読まない）
 2. 集計を `from → to (count, last_at, first_at)` のテーブルとして表 / JSON 出力
 3. `observe.py --flow` フラグで dispatch サマリを追加表示
-4. `runtime/observatory/resource_usage.py` 新設。Mindspace と Nexus storage の総バイト数を計測（`os.scandir` 再帰、symlink フォロー禁止）
+4. `runtime/pillars/observation/resource_usage.py` 新設。Mindspace と Nexus storage の総バイト数を計測（`os.scandir` 再帰、symlink フォロー禁止）
 5. `observe.py --resource` で容量カラム追加
 6. テスト: frontmatter パーサの ill-formed 耐性、再帰中の OSError ハンドリング
 
@@ -279,14 +279,14 @@ ADR-0010 §4 で「Mind の観測は Axiom 制約下」と確定。Pillar とし
 
 **依存関係**: v0.1 と独立。並列開発可。
 
-**判断ポイント**: frontmatter フィールドは `runtime/nexus/storage.py` の実装に追従する必要がある。**Conduit Pillar 側のフォーマット契約を本 PR で文書化**（`runtime/nexus/dispatch-format.md` 新設）して凍結する。
+**判断ポイント**: frontmatter フィールドは `runtime/pillars/conduit/storage.py` の実装に追従する必要がある。**Conduit Pillar 側のフォーマット契約を本 PR で文書化**（`runtime/pillars/conduit/dispatch-format.md` 新設）して凍結する。
 
 ### Observation Pillar v0.3: Axiom 違反検知 + 履歴比較
 
 **Warden 観点の責務**: Judgment Pillar が消費する違反候補シグナルを生成する。Warden は Axiom に縛られない（ADR-0010 §5）ので無制約に判定できる。
 
 **スコープ**:
-1. `runtime/observatory/anomaly.py` 新設。以下のシグナルを `warning` / `info` で列挙：
+1. `runtime/pillars/observation/anomaly.py` 新設。以下のシグナルを `warning` / `info` で列挙：
    - **W1**: Mindspace の mtime 更新と Conduit Pillar 呼び出し履歴（v0.2）が不整合（Nexus を介さない外部書き込みの疑い）
    - **W2**: Mindspace 配下に他 Mind 名のディレクトリ片（不可侵原則違反の物理的痕跡）
    - **W3**: `.mind-meta.md` の `kind` が `runtime/kinds/` に存在しない（孤児 Mind）
@@ -310,7 +310,7 @@ ADR-0010 §4 で「Mind の観測は Axiom 制約下」と確定。Pillar とし
 **Warden 観点の責務**: 暫定実装から正式 Pillar への昇格。他 Pillar からの内部 API 呼び出しと、Mind 用 MCP tool（Axiom 制約付き）を両立する。
 
 **スコープ**:
-1. **物理移動**: `runtime/observatory/` → `runtime/pillars/observation/`（ADR-0011 §3、Phase 5a-2 = Issue #37 と同期）
+1. **物理移動**: `runtime/pillars/observation/` → `runtime/pillars/observation/`（ADR-0011 §3、Phase 5a-2 = Issue #37 と同期）
 2. **編集不可機構の適用**: CODEOWNERS / pre-commit / CI チェック（ADR-0011 §4）
 3. **Warden 内部 API**: 他 Pillar が `from runtime.pillars.observation import ...` で直接呼ぶ。同プロセス内 import を許可（ADR-0010 §6「Warden は機能集合体」と整合）
 4. **Mind 向け MCP tool**: Conduit Pillar に Axiom 制約付き API を追加：
@@ -406,24 +406,24 @@ ADR-0011 §4 で `runtime/pillars/` 配下は機械的に編集不可（CODEOWNE
 
 ### 上位設計
 
-- [ADR-0001: ai-org-os を「開発組織の不変項」を定義するフレームワークとして再定義する](../../docs/adr/0001-ai-org-os-as-invariant-framework.md) — Axiom の出典
-- [ADR-0002: 用語と「メタのメタ」構造の確定](../../docs/adr/0002-vocabulary-and-meta-meta-structure.md) — Mindspace 不可侵 / 3 段階プロセス / 痕跡
-- [ADR-0005: Phase 3 = Nexus（MCP サーバー）直行](../../docs/adr/0005-phase-3-mcp-direct-with-nexus.md) — 依存ゼロ方針
-- [ADR-0006: Phase 5（Realm + Warden + Guildmaster）の設計案](../../docs/adr/0006-phase-5-realm-warden-guildmaster.md) — v1.0 統合先、Accepted（2026-05-23）
-- [ADR-0009: bash-editor / claude-team との関係性と流用方針](../../docs/adr/0009-relationship-with-bash-editor-and-claude-team.md) — fork しない / 流用方針
-- [ADR-0010: 観測の哲学 / Warden は機能の集合体 / Mind の能動性](../../docs/adr/0010-observation-philosophy-and-warden-as-collective.md) — **本書の起点**、Warden = 機能集合体 / 観測の 2 種類
-- [ADR-0011: Warden 内 Claude の命名と分離（Pillar 採用）](../../docs/adr/0011-warden-claude-naming-and-separation.md) — Pillar 命名と配置、編集不可機構（PR #53）
+- [ADR-0001: ai-org-os を「開発組織の不変項」を定義するフレームワークとして再定義する](../../../docs/adr/0001-ai-org-os-as-invariant-framework.md) — Axiom の出典
+- [ADR-0002: 用語と「メタのメタ」構造の確定](../../../docs/adr/0002-vocabulary-and-meta-meta-structure.md) — Mindspace 不可侵 / 3 段階プロセス / 痕跡
+- [ADR-0005: Phase 3 = Nexus（MCP サーバー）直行](../../../docs/adr/0005-phase-3-mcp-direct-with-nexus.md) — 依存ゼロ方針
+- [ADR-0006: Phase 5（Realm + Warden + Guildmaster）の設計案](../../../docs/adr/0006-phase-5-realm-warden-guildmaster.md) — v1.0 統合先、Accepted（2026-05-23）
+- [ADR-0009: bash-editor / claude-team との関係性と流用方針](../../../docs/adr/0009-relationship-with-bash-editor-and-claude-team.md) — fork しない / 流用方針
+- [ADR-0010: 観測の哲学 / Warden は機能の集合体 / Mind の能動性](../../../docs/adr/0010-observation-philosophy-and-warden-as-collective.md) — **本書の起点**、Warden = 機能集合体 / 観測の 2 種類
+- [ADR-0011: Warden 内 Claude の命名と分離（Pillar 採用）](../../../docs/adr/0011-warden-claude-naming-and-separation.md) — Pillar 命名と配置、編集不可機構（PR #53）
 
 ### 同 Observation Pillar 内
 
-- [`runtime/observatory/README.md`](./README.md) — 設計根拠と現状の使い方
-- [`runtime/observatory/mind_status.py`](./mind_status.py) — 純粋関数群
-- [`runtime/observatory/observe.py`](./observe.py) — CLI 本体（暫定実装）
-- [`runtime/observatory/test_mind_status.py`](./test_mind_status.py) — unittest
+- [`runtime/pillars/observation/README.md`](./README.md) — 設計根拠と現状の使い方
+- [`runtime/pillars/observation/mind_status.py`](./mind_status.py) — 純粋関数群
+- [`runtime/pillars/observation/observe.py`](./observe.py) — CLI 本体（暫定実装）
+- [`runtime/pillars/observation/test_mind_status.py`](./test_mind_status.py) — unittest
 
 ### 観測データ源
 
-- [`runtime/nexus/storage.py`](../nexus/storage.py) — Dispatch storage、v0.2 で frontmatter を読む対象。Phase 5a-2 で Conduit Pillar に統合
+- [`runtime/pillars/conduit/storage.py`](../conduit/storage.py) — Dispatch storage、v0.2 で frontmatter を読む対象。Phase 5a-2 で Conduit Pillar に統合
 - `runtime/minds/<name>/.mind-meta.md` — Mind メタ、v0.3 で kind 整合を取る
 - `runtime/kinds/*.md` — Kind カタログ、v0.3 W3 で照合。Phase 5a-4 で Registry Pillar に統合
 

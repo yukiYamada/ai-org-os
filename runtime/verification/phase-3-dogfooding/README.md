@@ -14,7 +14,7 @@ python3 runtime/verification/phase-3-dogfooding/simulate_two_minds.py
 
 期待出力: 7 ステップ（送信 → 受信 → ack → 再 read → 冪等性 → archive → 他 Mind 不可侵）すべて通る。
 
-このスクリプトは `tempfile.TemporaryDirectory` を使うので、`runtime/nexus/storage/` を汚さない。
+このスクリプトは `tempfile.TemporaryDirectory` を使うので、`runtime/pillars/conduit/storage/` を汚さない。
 
 ## 方式 B: 2 ターミナル + 2 Claude（最も本物、5–10 分）
 
@@ -24,8 +24,8 @@ python3 runtime/verification/phase-3-dogfooding/simulate_two_minds.py
 
 1. 2 Mind を spawn:
    ```bash
-   ./runtime/spawn-mind.sh generic designer alice
-   ./runtime/spawn-mind.sh generic reviewer bob
+   ./runtime/pillars/lifecycle/spawn-mind.sh generic designer alice
+   ./runtime/pillars/lifecycle/spawn-mind.sh generic reviewer bob
    ```
 
 2. **ターミナル 1** で alice 起動:
@@ -50,7 +50,7 @@ python3 runtime/verification/phase-3-dogfooding/simulate_two_minds.py
 ### 期待挙動
 
 双方の Claude が `send_dispatch` / `read_inbox` / `ack_dispatch` を MCP 経由で呼ぶ。
-ホスト上で `runtime/nexus/storage/inbox/{alice,bob}/` および `archive/{alice,bob}/` にファイルが出来ては移動していくのを観察できる。
+ホスト上で `runtime/pillars/conduit/storage/inbox/{alice,bob}/` および `archive/{alice,bob}/` にファイルが出来ては移動していくのを観察できる。
 
 ### identity binding 確認（Issue #19 / PR #27 マージ後）
 
@@ -88,8 +88,8 @@ CI でも GitHub Actions が `runtime/**` 変更時に毎回回す。
 
 1. **2 Mind を spawn**（方式 B と同じ）:
    ```bash
-   ./runtime/spawn-mind.sh generic designer alice
-   ./runtime/spawn-mind.sh generic reviewer bob
+   ./runtime/pillars/lifecycle/spawn-mind.sh generic designer alice
+   ./runtime/pillars/lifecycle/spawn-mind.sh generic reviewer bob
    ```
 
 2. **bash-editor を起動**:
@@ -132,9 +132,9 @@ CI でも GitHub Actions が `runtime/**` 変更時に毎回回す。
 
 | 観測手段 | スコープ | 即時性 | 介入 |
 |---|---|---|---|
-| `runtime/observatory/observe.py` | Mind のメタ情報（mtime / 件数） | ポーリング | 不可（観測のみ） |
+| `runtime/pillars/observation/observe.py` | Mind のメタ情報（mtime / 件数） | ポーリング | 不可（観測のみ） |
 | bash-editor 併用（方式 E） | Mind 内部の出力（リアルタイム） | リアルタイム | 可（write_terminal） |
-| `runtime/list-minds.sh` | spawn 中の Mind 一覧 | 1 shot | 不可 |
+| `runtime/pillars/lifecycle/list-minds.sh` | spawn 中の Mind 一覧 | 1 shot | 不可 |
 
 **使い分け**: 普段は `observe.py`、本物検証 / トラブルシュート時は方式 E。
 
@@ -174,5 +174,5 @@ Claude Code の Agent ツールでサブエージェントを 2 つ spawn し、
 - [ADR-0007](../../../docs/adr/0007-phase-3-reliability-properties.md) — 信頼性プロパティ（消失検知は運用責任）
 - [ADR-0008](../../../docs/adr/0008-nexus-identity-binding.md) — identity binding（PR #27）
 - [ADR-0009](../../../docs/adr/0009-relationship-with-bash-editor-and-claude-team.md) — bash-editor / claude-team との関係（方式 E の根拠）
-- [`runtime/nexus/README.md`](../../nexus/README.md) — Nexus の使い方
-- [`runtime/observatory/README.md`](../../observatory/README.md) — Realm 観測ツール（最小・独自実装）
+- [`runtime/pillars/conduit/README.md`](../../nexus/README.md) — Nexus の使い方
+- [`runtime/pillars/observation/README.md`](../../observatory/README.md) — Realm 観測ツール（最小・独自実装）

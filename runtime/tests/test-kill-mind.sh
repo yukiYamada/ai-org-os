@@ -6,8 +6,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SPAWN="${RUNTIME_DIR}/spawn-mind.sh"
-KILL="${RUNTIME_DIR}/kill-mind.sh"
+# Phase 5a-2: Lifecycle Pillar is at runtime/pillars/lifecycle/ (ADR-0011).
+SPAWN="${RUNTIME_DIR}/pillars/lifecycle/spawn-mind.sh"
+KILL="${RUNTIME_DIR}/pillars/lifecycle/kill-mind.sh"
 
 TEST_ID="kt$$-$(date +%s)"
 PASS=0

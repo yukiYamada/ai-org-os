@@ -3,10 +3,10 @@
 # kill-mind.sh — Mind を破棄する（Mindspace ごと消す）
 #
 # 用法:
-#   ./runtime/kill-mind.sh <mind-name>
+#   ./runtime/pillars/lifecycle/kill-mind.sh <mind-name>
 #
 # 例:
-#   ./runtime/kill-mind.sh my-first-mind
+#   ./runtime/pillars/lifecycle/kill-mind.sh my-first-mind
 #
 # Axiom との関係:
 #   - 思考が消えれば Mindspace も消える（不可侵原則の系として）
@@ -28,7 +28,10 @@ fi
 MIND_NAME="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIND_DIR="${SCRIPT_DIR}/minds/${MIND_NAME}"
+# Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。runtime/minds/ は
+# RUNTIME_DIR 経由で参照する。
+RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
 
 if [ ! -d "${MIND_DIR}" ]; then
   echo "[ERROR] Mind '${MIND_NAME}' does not exist (looked for ${MIND_DIR})" >&2

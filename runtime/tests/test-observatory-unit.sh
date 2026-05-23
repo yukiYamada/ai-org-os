@@ -6,7 +6,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OBSERVATORY_DIR="$(cd "${SCRIPT_DIR}/../observatory" && pwd)"
+OBSERVATORY_DIR="$(cd "${SCRIPT_DIR}/../pillars/observation" && pwd)"
 
 if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
   echo "[skip] python not found; skipping Observatory unit tests."

@@ -3,7 +3,7 @@
 # list-minds.sh — 現在 spawn されている Mind の一覧を表示する
 #
 # 用法:
-#   ./runtime/list-minds.sh
+#   ./runtime/pillars/lifecycle/list-minds.sh
 #
 # 出力フォーマット (table-ish):
 #   NAME              KIND       PERSONA      SPAWNED_AT
@@ -16,7 +16,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINDS_DIR="${SCRIPT_DIR}/minds"
+# Phase 5a-2: list-minds.sh は runtime/pillars/lifecycle/ 配下。runtime/minds/ は
+# RUNTIME_DIR 経由で参照する。
+RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+MINDS_DIR="${RUNTIME_DIR}/minds"
 
 # .mind-meta.md を持つディレクトリだけを「正規の Mind」として扱う
 mapfile -t mind_dirs < <(find "${MINDS_DIR}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)

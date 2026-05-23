@@ -3,9 +3,9 @@ Unit tests for Nexus storage layer.
 
 Standard library only (unittest, tempfile, pathlib). No MCP dependency.
 
-Run (any of these works from the repo root or from runtime/nexus):
-  python -m unittest discover runtime/nexus -p 'test_*.py'
-  cd runtime/nexus && python -m unittest test_storage
+Run (any of these works from the repo root or from runtime/pillars/conduit):
+  python -m unittest discover runtime/pillars/conduit -p 'test_*.py'
+  cd runtime/pillars/conduit && python -m unittest test_storage
 """
 
 from __future__ import annotations

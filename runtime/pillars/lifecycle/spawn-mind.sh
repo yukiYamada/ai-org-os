@@ -3,10 +3,10 @@
 # spawn-mind.sh — Mind を 1 個起動する最小スクリプト（Phase 1 + Phase 3）
 #
 # 用法:
-#   ./runtime/spawn-mind.sh <kind> <persona> <mind-name>
+#   ./runtime/pillars/lifecycle/spawn-mind.sh <kind> <persona> <mind-name>
 #
 # 例:
-#   ./runtime/spawn-mind.sh generic designer my-first-mind
+#   ./runtime/pillars/lifecycle/spawn-mind.sh generic designer my-first-mind
 #
 # 仕様:
 #   - Mindspace = ホスト上のディレクトリ runtime/minds/<mind-name>/
@@ -51,20 +51,24 @@ validate_arg "kind" "${KIND}"
 validate_arg "persona" "${PERSONA}"
 validate_arg "mind-name" "${MIND_NAME}"
 
+# Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下に移動した。
+# runtime/{kinds,personas,minds} および pillars/conduit/ は SCRIPT_DIR から見て
+# `../..` を経由して runtime/ ルートに戻ってからアクセスする。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_FILE="${SCRIPT_DIR}/kinds/${KIND}.md"
-PERSONA_FILE="${SCRIPT_DIR}/personas/${PERSONA}.md"
-MIND_DIR="${SCRIPT_DIR}/minds/${MIND_NAME}"
+RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+KIND_FILE="${RUNTIME_DIR}/kinds/${KIND}.md"
+PERSONA_FILE="${RUNTIME_DIR}/personas/${PERSONA}.md"
+MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
 
 if [ ! -f "${KIND_FILE}" ]; then
   echo "[ERROR] Kind '${KIND}' is not registered (looked for ${KIND_FILE})" >&2
-  echo "[HINT] List available Kinds: ls ${SCRIPT_DIR}/kinds/" >&2
+  echo "[HINT] List available Kinds: ls ${RUNTIME_DIR}/kinds/" >&2
   exit 2
 fi
 
 if [ ! -f "${PERSONA_FILE}" ]; then
   echo "[ERROR] Persona '${PERSONA}' not found (looked for ${PERSONA_FILE})" >&2
-  echo "[HINT] List available Personas: ls ${SCRIPT_DIR}/personas/" >&2
+  echo "[HINT] List available Personas: ls ${RUNTIME_DIR}/personas/" >&2
   exit 3
 fi
 
@@ -115,7 +119,7 @@ EOF
 # read_inbox / ack_dispatch calls whose from_mind / mind_name does not match
 # this binding, preventing one Mind from impersonating another via crafted
 # arguments.
-NEXUS_PY="${SCRIPT_DIR}/nexus/nexus.py"
+NEXUS_PY="${RUNTIME_DIR}/pillars/conduit/nexus.py"
 echo "[spawn-mind] Installing Nexus MCP config (.mcp.json) using '${PYTHON_BIN}', bound to '${MIND_NAME}'"
 cat > "${MIND_DIR}/.mcp.json" <<JSON
 {
