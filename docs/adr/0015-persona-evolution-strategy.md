@@ -10,6 +10,10 @@
 
 **Accepted** — 2026-05-24
 
+## ADR 間の依存に関する注記
+
+本 ADR は ADR-0012（PR #57）と **並行作成** されている。本書内で参照する `0012-human-position-outside-realm.md` は PR #57 がマージされて初めて main に存在する。両 PR は独立して accepted 状態だが、main 上でリンクが解決するのは両方マージ後である。
+
 ## Context（背景）
 
 現在 Persona は 3 種類のみ：
