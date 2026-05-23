@@ -163,9 +163,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
  && claude --version
 
 # Nexus と Warden の Python 依存
+# build.context は repo root（compose で `context: ..` を指定する想定）。
+# COPY のソースは context-relative で書く必要がある（Codex P2 PR #32 指摘の修正）。
 WORKDIR /realm
-COPY warden/requirements.txt /realm/warden/requirements.txt
-COPY ../runtime/nexus/requirements.txt /realm/runtime/nexus/requirements.txt
+COPY runtime/realm/warden/requirements.txt /realm/warden/requirements.txt
+COPY runtime/nexus/requirements.txt /realm/runtime/nexus/requirements.txt
 RUN pip install --no-cache-dir \
         -r /realm/warden/requirements.txt \
         -r /realm/runtime/nexus/requirements.txt
@@ -174,8 +176,8 @@ RUN pip install --no-cache-dir \
 # Phase 6 で COPY ベースの immutable image に切り替える可能性あり
 
 # Warden の Persona は image に焼く（中身が image の挙動を決める）
-COPY warden/CLAUDE.md /realm/warden/CLAUDE.md
-COPY warden/*.py /realm/warden/
+COPY runtime/realm/warden/CLAUDE.md /realm/warden/CLAUDE.md
+COPY runtime/realm/warden/*.py /realm/warden/
 
 # 非 root user で動かす（docker socket mount は 5c でしか起きない）
 RUN useradd -ms /bin/bash warden
