@@ -52,6 +52,10 @@ runtime/pillars/conduit/storage/inbox/*
 runtime/pillars/conduit/storage/archive/*
 !runtime/pillars/conduit/storage/archive/.gitkeep
 
+# ai-org-os: Observation Pillar snapshots (v0.1, ROADMAP). Host-local, not committed.
+runtime/pillars/observation/snapshots/*
+!runtime/pillars/observation/snapshots/.gitkeep
+
 # Python
 *.pyc
 __pycache__/

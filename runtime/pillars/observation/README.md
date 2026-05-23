@@ -100,6 +100,53 @@ Mind は「観測されている」を意識する必要はない（application 
 
 これは「壁の外から灯りがついてるかを観察する」レベルで、Mindspace の所有権は侵さない。
 
+## スナップショット履歴（v0.1, ROADMAP）
+
+時系列観測の基盤として、現状の `observe.py --json` 相当の JSON を
+`runtime/pillars/observation/snapshots/<UTC timestamp>.json` に保存できる：
+
+```bash
+# 1 件保存 + stdout に JSON も出す（pipe で次の処理に流せる）
+python3 runtime/pillars/observation/observe.py --snapshot
+
+# 7 日より古いスナップショットを削除（デフォルト TTL=7、自動削除はしない）
+python3 runtime/pillars/observation/observe.py --prune
+
+# TTL を変える（例: 30 日）
+python3 runtime/pillars/observation/observe.py --prune --ttl-days 30
+```
+
+ファイル名は `YYYYMMDDTHHMMSSZ-<microsecond>.json`（ソート可能、衝突回避）。
+
+### 定期実行の例
+
+#### cron（Linux / macOS）
+
+```cron
+# 10 分ごとにスナップショット、毎日 03:30 に古いものを削除
+*/10 * * * * cd /path/to/ai-org-os && python3 runtime/pillars/observation/observe.py --snapshot >/dev/null
+30 3 * * *   cd /path/to/ai-org-os && python3 runtime/pillars/observation/observe.py --prune >/dev/null
+```
+
+#### 外側スクリプト（コンテナ常駐 / どこでも動く）
+
+```bash
+# 30 秒ごとに snapshot を取り続ける小さなループ
+while true; do
+  python3 runtime/pillars/observation/observe.py --snapshot >/dev/null
+  sleep 30
+done
+```
+
+### 設計判断
+
+- **snapshots/ は `.gitignore`**（ROADMAP v0.1 §判断ポイント）。観測痕跡はホストローカル、再現性より運用性
+- **TTL prune は自動化しない**。利用者が明示的に `--prune` を呼ぶ。古い記録を消す判断は外側に置く
+- **書き込みは tmp → rename**（atomic）。壊れた JSON を残さない
+- **microsecond 衝突は -2/-3 suffix で回避**。`write_snapshot` を高速連打しても重複なし
+
+詳細仕様: [`ROADMAP.md`](./ROADMAP.md) §「Observation Pillar v0.1」
+
 ## テスト
 
 ```bash
