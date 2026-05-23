@@ -72,15 +72,82 @@ alice の Claude が `from_mind="bob"` で `send_dispatch` を呼んだ場合、
 `test-dispatch-e2e.sh` が storage 直接呼び出しで end-to-end を検証している。
 CI でも GitHub Actions が `runtime/**` 変更時に毎回回す。
 
+## 方式 E: bash-editor を外部観測ツールとして併用（方式 B の拡張）
+
+> Status: **未検証**。手順書のみ提供。本方式は外部リポジトリ `local-multi-window-bash-editor` を使う。
+> 統合方針は [ADR-0009](../../../docs/adr/0009-relationship-with-bash-editor-and-claude-team.md) を参照（**fork / submodule はしない、外部ツール併用に留める**）。
+
+方式 B は 2 ターミナルを人間が交互に見る形だが、bash-editor を併用すれば **1 ブラウザタブで両方の Mind の出力を同時監視**できる。確認プロンプトの自動検知、グループ表示、優先度付きダッシュボードも得られる。
+
+### 前提
+
+- `C:\Users\kokoro068\git\local-multi-window-bash-editor` が手元にあり、Node.js 環境で `npm install` 済み
+- bash-editor を起動できる: `node server.js` で Express + WebSocket がローカルポートを listen する想定
+
+### 手順
+
+1. **2 Mind を spawn**（方式 B と同じ）:
+   ```bash
+   ./runtime/spawn-mind.sh generic designer alice
+   ./runtime/spawn-mind.sh generic reviewer bob
+   ```
+
+2. **bash-editor を起動**:
+   ```bash
+   cd ../local-multi-window-bash-editor
+   node server.js
+   # → localhost:<port> を開く（ポート番号は bash-editor 側の README 参照）
+   ```
+
+3. **bash-editor の UI で 2 session を作成**:
+   - グループ名: `ai-org-os-phase3` （Guild 名と対応させる）
+   - session 1: cwd = `<ai-org-os repo>/runtime/minds/alice`
+   - session 2: cwd = `<ai-org-os repo>/runtime/minds/bob`
+
+4. **各 session で `claude` を起動**:
+   - bash-editor の write_terminal API（または UI 入力）で各 session に `claude\n` を送る
+   - `.mcp.json` と `CLAUDE.md` が自動読み込みされ Nexus 接続 + Persona 装着
+
+5. **方式 B と同じく Dispatch を交わす指示を投入**:
+   - alice の Claude に「bob に Dispatch を送って」
+   - bob の Claude に「inbox を確認して」
+   - bash-editor の UI で**両 session の出力を 1 画面で観測**
+
+### bash-editor で得られる追加情報（ai-org-os 単体では見えない）
+
+| 観測対象 | bash-editor の機能 |
+|---|---|
+| 各 Mind の活動状態 | session のステータスドット（active / waiting / idle） |
+| 確認プロンプト待ち | `waiting_confirmation` 自動検知（CONFIRM_PATTERNS） |
+| 出力の差分 | 最新出力をブラウザでリアルタイム表示 |
+| 介入 | `write_terminal` / UI 入力で Mind に直接指示を送れる |
+
+### 注意（ADR-0009 と整合）
+
+- bash-editor の **PTY 内で動く Claude** が `.mcp.json` を読んで Nexus に接続する
+- Nexus と bash-editor は **独立プロセス** で動き、通信は MCP stdio 経由（Mind 内部）
+- bash-editor は「**外側から Mind を見る目**」、Nexus は「**Mind 同士をつなぐ経路**」、役割分担は崩れない
+
+### ai-org-os 単体ツールとの比較
+
+| 観測手段 | スコープ | 即時性 | 介入 |
+|---|---|---|---|
+| `runtime/observatory/observe.py` | Mind のメタ情報（mtime / 件数） | ポーリング | 不可（観測のみ） |
+| bash-editor 併用（方式 E） | Mind 内部の出力（リアルタイム） | リアルタイム | 可（write_terminal） |
+| `runtime/list-minds.sh` | spawn 中の Mind 一覧 | 1 shot | 不可 |
+
+**使い分け**: 普段は `observe.py`、本物検証 / トラブルシュート時は方式 E。
+
 ## 方式の使い分け
 
-| 方式 | 何を検証 | 時間 | 本物度 | 自動化 |
-|---|---|---|---|---|
-| A | storage ロジック + 冪等性 + 不可侵 | 1 分 | 中 | 半自動（手で実行） |
-| B | MCP wiring + Claude 統合 + 実 Persona の振る舞い | 5–10 分 | 高 | 手動 |
-| C | 回帰テスト（CI） | 数秒 | 中 | 完全自動 |
+| 方式 | 何を検証 | 時間 | 本物度 | 自動化 | 外部依存 |
+|---|---|---|---|---|---|
+| A | storage ロジック + 冪等性 + 不可侵 | 1 分 | 中 | 半自動（手で実行） | なし |
+| B | MCP wiring + Claude 統合 + 実 Persona の振る舞い | 5–10 分 | 高 | 手動 | Claude CLI |
+| C | 回帰テスト（CI） | 数秒 | 中 | 完全自動 | なし |
+| E | 方式 B + 1 ブラウザタブで複数 Mind 同時観測 | 10–20 分 | 最高 | 手動 + ブラウザ | Claude CLI + bash-editor |
 
-通常運用は **A + C** で十分。**B は新機能追加時 / Phase 5 着手前**に手で確認する。
+通常運用は **A + C** で十分。**B / E は新機能追加時 / Phase 5 着手前 / 詰まった時**に手で確認する。
 
 ## 既知の制限（Phase 3 時点）
 
@@ -106,4 +173,6 @@ Claude Code の Agent ツールでサブエージェントを 2 つ spawn し、
 - [ADR-0005](../../../docs/adr/0005-phase-3-mcp-direct-with-nexus.md) — Phase 3 = MCP 直行
 - [ADR-0007](../../../docs/adr/0007-phase-3-reliability-properties.md) — 信頼性プロパティ（消失検知は運用責任）
 - [ADR-0008](../../../docs/adr/0008-nexus-identity-binding.md) — identity binding（PR #27）
+- [ADR-0009](../../../docs/adr/0009-relationship-with-bash-editor-and-claude-team.md) — bash-editor / claude-team との関係（方式 E の根拠）
 - [`runtime/nexus/README.md`](../../nexus/README.md) — Nexus の使い方
+- [`runtime/observatory/README.md`](../../observatory/README.md) — Realm 観測ツール（最小・独自実装）
