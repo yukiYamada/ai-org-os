@@ -8,10 +8,18 @@
 
 ## Status
 
-**Proposed** — 2026-05-22
+**Proposed (Needs Update by [ADR-0010](./0010-observation-philosophy-and-warden-as-collective.md))** — 2026-05-22 / 注記追加 2026-05-23
 
 > 本 ADR は **設計のみ**。**実装は本 ADR の承認後に着手する**。
 > Accepted に昇格させるには「推奨案」セクションの選択肢を絞り込む必要がある。
+>
+> **2026-05-23 注記**: [ADR-0010](./0010-observation-philosophy-and-warden-as-collective.md) で以下が確定：
+> - **Warden = 単一プロセスではなく機能の集合体**（既存の `observe.py` / `spawn-mind.sh` 等も Warden の構成要素）
+> - **Warden 内の判断 Claude は Mind とは別カテゴリ**（ai-org-os core 提供、編集不可）
+> - **Axiom（Mindspace 不可侵）は Mind 同士のルール、Warden には適用されない**
+> - **観測は Warden の自己認識（無制約）**であり、Observatory は Warden 機能の一部
+>
+> 本文中の「Warden Claude が走る」「Warden = 1 つの常駐実体」という表現は ADR-0010 と整合させて読むこと。本 ADR の Accepted 昇格時に該当箇所を書き直す。
 
 ---
 
