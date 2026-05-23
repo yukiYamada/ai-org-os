@@ -8,18 +8,19 @@
 
 ## Status
 
-**Proposed (Needs Update by [ADR-0010](./0010-observation-philosophy-and-warden-as-collective.md))** — 2026-05-22 / 注記追加 2026-05-23
+**Accepted** — 2026-05-23（ADR-0010 を反映して昇格）
 
-> 本 ADR は **設計のみ**。**実装は本 ADR の承認後に着手する**。
-> Accepted に昇格させるには「推奨案」セクションの選択肢を絞り込む必要がある。
+> 本 ADR は当初 Proposed として 2026-05-22 に起案され、Phase 5 の論点比較と推奨案を並べた。
+> 2026-05-23 の壁打ち（議論 A: Mind の能動性、議論 C: 観測の哲学）で [ADR-0010](./0010-observation-philosophy-and-warden-as-collective.md) が確定し、Warden の本質的な再整理が行われた：
 >
-> **2026-05-23 注記**: [ADR-0010](./0010-observation-philosophy-and-warden-as-collective.md) で以下が確定：
-> - **Warden = 単一プロセスではなく機能の集合体**（既存の `observe.py` / `spawn-mind.sh` 等も Warden の構成要素）
-> - **Warden 内の判断 Claude は Mind とは別カテゴリ**（ai-org-os core 提供、編集不可）
-> - **Axiom（Mindspace 不可侵）は Mind 同士のルール、Warden には適用されない**
-> - **観測は Warden の自己認識（無制約）**であり、Observatory は Warden 機能の一部
+> - **Warden = 単一プロセス（Claude セッション）ではなく、機能の集合体**
+> - 既存ツール（`observe.py` / `spawn-mind.sh` / `kill-mind.sh` / `list-minds.sh` / Nexus）は **既に Warden の構成要素**
+> - **Mind 内 Claude と Warden 内 Claude は別カテゴリ**（後者は ai-org-os core 提供、編集不可、命名は別 ADR で確定予定 = Issue #36）
+> - **Axiom（Mindspace 不可侵）は Mind 同士のルール**、Warden には適用されない
+> - **Observatory は Warden 機能の一部**（単独ツールではない、Warden 不在時の暫定実装）
 >
-> 本文中の「Warden Claude が走る」「Warden = 1 つの常駐実体」という表現は ADR-0010 と整合させて読むこと。本 ADR の Accepted 昇格時に該当箇所を書き直す。
+> これらを反映して本 ADR を Accepted 昇格。
+> 推奨案サマリと「Warden 実装」「各 Claude の実装方針」などのセクションは下記**更新メモ**を併読すること。本文の細部書き直しは Phase 5a 着手時に必要箇所を修正する。
 
 ---
 
@@ -78,10 +79,30 @@ Phase 5 では **複数 Guild / 認可 / TTL / 高度なリソース制限 / Iss
 
 ## Decision（推奨案 + 候補比較）
 
-> 本 ADR は Proposed のため、ここでは「単一の決定」ではなく **推奨案** と **候補比較** を並べる。
-> Accepted に昇格するときに、ユーザーが下の選択肢から 1 案を選んで確定する想定。
+> 本 ADR は Accepted 昇格時に、以下の **ADR-0010 反映による更新メモ** を併読してください。
 
-### 推奨案サマリ（叩き台、Accepted 化時に調整可）
+### ADR-0010 反映による更新メモ（2026-05-23）
+
+| 当初の表現 | ADR-0010 反映後の理解 |
+|---|---|
+| 「Warden が 1 つ動く」「Warden Claude」「Warden = 常駐 Python プロセス」 | **Warden = 機能の集合体**（複数機能・複数 Claude セッションが並走、observe.py / spawn-mind.sh 等の既存ツールも Warden の一部） |
+| 「Realm コンテナ内のサブコンテナは Mind のみ」 | 維持（α 案、DinD 回避） |
+| 「Warden Claude が判断時に CLI subprocess」 | Warden 内の判断 Claude は **Anthropic SDK 直叩き**を推奨（ADR-0010）。Mind は CLI + 外側ループ |
+| 「Guildmaster = Mind と同じ仕組み」 | 維持。ただし Guildmaster の特権境界は Warden Kind 系の命名 ADR（Issue #36）で再整理 |
+| 「3 段階プロセスを Nexus MCP tools で」 | 維持 |
+| 「Mind は静的 Kind Registry」 | 維持。Phase 6 で動的追加 |
+| 「Issue 投入はファイル」 | 維持 |
+| 「5a / 5b / 5c 段階分割」 | 維持。ただし 5a-1 (Realm コンテナ起動) は ADR-0010 の方針で「Warden = 集合体」を前提に設計（Issue #35） |
+
+実装の詳細は段階分割された Issue（#33-#41）に従う：
+- **#33 (本 PR)**: ADR-0006 を Accepted 昇格
+- **#34**: Observatory ROADMAP の Warden 機能化
+- **#35**: Phase 5a-1 Realm コンテナ起動
+- **#36**: Warden 内 Claude の命名と分離 ADR
+- **#37-#40**: Phase 5a-2 〜 5a-5
+- **#41**: Mind の外側ループスクリプト
+
+### 推奨案サマリ（叩き台、ADR-0010 反映後に下記の通り更新）
 
 | 軸 | 推奨 | 理由（要約） |
 |---|---|---|
