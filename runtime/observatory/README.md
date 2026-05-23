@@ -80,6 +80,16 @@ python3 runtime/observatory/observe.py --json
 ADR-0009 で「**fork / submodule はしない、純粋ロジックだけ流用する**」と決めたため。
 将来 Realm Dashboard を Web UI 化する判断が出たら、`bash-editor` を **外部ツールとして併用** する手順を [`runtime/verification/phase-3-dogfooding/README.md`](../verification/phase-3-dogfooding/README.md) に追加する想定（方式 E 候補）。
 
+## Warden との関係（重要、2026-05-23 追記）
+
+[ADR-0010](../../docs/adr/0010-observation-philosophy-and-warden-as-collective.md) で確定：
+
+- **本ツール（observe.py）は Warden の機能の一部**として位置づけられる
+- 現状は **Warden 不在時の暫定実装**
+- Phase 5 で Warden が登場 → Observatory は Warden に吸収（独立ツールではなくなる）
+
+Mind は「観測されている」を意識する必要はない（application log と同じ性質）。観測情報を必要な Mind には Warden 経由で提供される（MCP tool / Persona 注入 / 人間向け UI）。
+
 ## 不可侵原則との関係
 
 - Mindspace の**中身は読まない**（Axiom: Mindspace 不可侵）
