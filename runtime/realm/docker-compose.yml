@@ -1,0 +1,30 @@
+# Phase 5a-1: Realm コンテナ起動定義（最小）
+#
+# build.context は repo root。runtime/realm/ から見て親（..）が repo root。
+# Codex P2 PR #32 の指摘で COPY ソースは context-relative。本 Phase は COPY 不使用、
+# bind mount のみ。
+#
+# Pillar 群は Phase 5a-2 で runtime/pillars/ 配下に統合される (ADR-0011)。
+# それまでは既存 runtime/{observatory,nexus,...} を bind mount で動かす。
+
+services:
+  realm:
+    build:
+      context: ../..
+      dockerfile: runtime/realm/Dockerfile
+    container_name: ai-org-os-realm
+    # repo 全体を read-only で参照（ADR 等の文書、テスト等）
+    # runtime/ だけは書き込み可（Mind spawn = runtime/minds/<name>/ 作成、Nexus storage 書込）
+    volumes:
+      - ../../:/realm/repo:ro
+      - ../../runtime:/realm/runtime
+    working_dir: /realm/runtime
+    environment:
+      # Phase 5a-1 マーカー。Pillar 化前の暫定フェーズ。
+      AI_ORG_OS_PHASE: "5a-1"
+      # API key 等のシークレットは Phase 5a-3（Judgment Pillar）で導入。
+      # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"  # ← 5a-3 で有効化
+    # ENTRYPOINT は Dockerfile の CMD（sleep infinity）。Phase 5a-2 以降で
+    # Pillar 起動スクリプトに切り替える。
+    init: true
+    restart: unless-stopped
