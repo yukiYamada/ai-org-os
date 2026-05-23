@@ -117,6 +117,18 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   exit 5
 fi
 
+# --start-loop 指定時は claude バイナリも事前検証する。
+# (mind-loop.sh の exit 4 を spawn 時点で先取り。「spawn 成功 / loop 即死」を防ぐ)
+if [ "${START_LOOP}" = "1" ]; then
+  CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
+  if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
+    echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH." >&2
+    echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path." >&2
+    echo "[HINT] Without claude, the --start-loop option cannot run mind-loop.sh." >&2
+    exit 8
+  fi
+fi
+
 echo "[spawn-mind] Creating Mindspace: ${MIND_DIR}"
 mkdir -p "${MIND_DIR}"
 

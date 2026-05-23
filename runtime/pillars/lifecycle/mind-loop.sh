@@ -7,7 +7,7 @@
 # 内のログに追記する。次の cycle までは sleep する。
 #
 # 用法:
-#   ./runtime/pillars/lifecycle/mind-loop.sh <mind-name> [--period SECONDS]
+#   ./runtime/pillars/lifecycle/mind-loop.sh <mind-name> [--period SECONDS] [--max-cycles N]
 #
 # 環境変数:
 #   AI_ORG_OS_CLAUDE_BIN   `claude` の代わりに呼ぶバイナリ（テスト時の差し替え用）
@@ -37,6 +37,17 @@ fi
 
 MIND_NAME="$1"
 shift
+
+# MIND_NAME のバリデーション。
+# spawn-mind.sh の _VALID_NAME_RE と同じ規則。
+# 緩めるとパス traversal (../escape) で任意ディレクトリに PID file / log を書ける。
+# Codex P2 PR #27 で spawn-mind.sh に入れた validate_arg と整合させる。
+_VALID_NAME_RE='^[A-Za-z0-9._-]{1,64}$'
+if [[ ! "${MIND_NAME}" =~ ${_VALID_NAME_RE} ]]; then
+  echo "[ERROR] Invalid mind-name: '${MIND_NAME}'" >&2
+  echo "[HINT] Must match ${_VALID_NAME_RE} (no quotes, backslashes, spaces, path separators)" >&2
+  exit 6
+fi
 
 PERIOD="${AI_ORG_OS_LOOP_PERIOD:-30}"
 MAX_CYCLES="${AI_ORG_OS_LOOP_MAX_CYCLES:-0}"
@@ -77,6 +88,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
+LOCK_DIR="${MIND_DIR}/.mind-loop.lock"
 PID_FILE="${MIND_DIR}/.mind-loop.pid"
 LOG_FILE="${MIND_DIR}/mind-loop.log"
 
@@ -86,16 +98,30 @@ if [ ! -d "${MIND_DIR}" ]; then
   exit 2
 fi
 
-# 既に同じ Mind でループが回っていたら、二重起動を拒否する。
-# pid file 内の PID が現在も生きていたら exit 3。
-if [ -f "${PID_FILE}" ]; then
-  EXISTING_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+# 二重起動の atomic ロック。
+# 旧実装は (1) PID file の存在チェック → (2) kill -0 → (3) PID file 書き込み の TOCTOU
+# があった。`mkdir` は POSIX 上 atomic なので、これを lock として使う。
+# lock が取れなかった = 別 loop が走っている → exit 3。
+# stale lock（前回が SIGKILL 等で落ちて lock が残った場合）は PID file 経由でチェック。
+if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+  # lock 取れず → 既存 loop が居るか、stale lock か判定
+  EXISTING_PID=""
+  if [ -f "${PID_FILE}" ]; then
+    EXISTING_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+  fi
   if [ -n "${EXISTING_PID}" ] && kill -0 "${EXISTING_PID}" 2>/dev/null; then
     echo "[ERROR] Mind '${MIND_NAME}' already has a loop running (pid ${EXISTING_PID})" >&2
     echo "[HINT] Stop it first: ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}" >&2
     exit 3
   fi
-  # PID file が残っているが対応プロセスが居ない (前回が落ちた等) → 上書きして続行
+  # stale lock: 前回の loop が SIGKILL で落ちた等。lock を奪って続行。
+  echo "[mind-loop] stale lock detected (no live process), reclaiming..." >&2
+  rm -rf "${LOCK_DIR}"
+  rm -f "${PID_FILE}"
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    echo "[ERROR] Could not acquire lock at ${LOCK_DIR}" >&2
+    exit 3
+  fi
 fi
 
 # ----- claude バイナリ解決 -----
@@ -120,10 +146,11 @@ on_signal() {
 }
 trap on_signal TERM INT
 
-cleanup_pid_file() {
+cleanup_on_exit() {
   rm -f "${PID_FILE}"
+  rm -rf "${LOCK_DIR}"
 }
-trap cleanup_pid_file EXIT
+trap cleanup_on_exit EXIT
 
 # ----- PID file 書き込み -----
 

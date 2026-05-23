@@ -73,6 +73,19 @@ code=$?
 set -e
 assert_exit_code "loop for missing mind" 2 "${code}"
 
+# ---- 1b. 不正な mind-name は exit 6 (self-review #61: spawn-mind の validate_arg と整合)
+echo "[case] 1b. 不正な mind-name (path traversal / 不正文字) は exit 6"
+set +e
+"${LOOP}" "../escape" --period 0 --max-cycles 1 >/dev/null 2>&1; rc1=$?
+"${LOOP}" 'a"b' --period 0 --max-cycles 1 >/dev/null 2>&1; rc2=$?
+"${LOOP}" 'a b' --period 0 --max-cycles 1 >/dev/null 2>&1; rc3=$?
+"${LOOP}" '' --period 0 --max-cycles 1 >/dev/null 2>&1; rc4=$?
+set -e
+assert_exit_code "mind-name with path traversal" 6 "${rc1}"
+assert_exit_code "mind-name with double quote" 6 "${rc2}"
+assert_exit_code "mind-name with space" 6 "${rc3}"
+assert_exit_code "empty mind-name" 6 "${rc4}"
+
 # ---- 2. 不正な --period は exit 1
 echo "[case] 2. --period に非数値を渡すと exit 1"
 # 先に Mind を作っておく（period バリデーションは引数解析時、Mind 存在チェックの前）
