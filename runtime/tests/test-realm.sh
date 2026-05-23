@@ -61,8 +61,12 @@ if [ "${code}" = "0" ]; then
   sleep 2  # コンテナ起動安定待ち
 
   echo "[case] 2. コンテナ内で既存ツール (list-minds.sh) が動く"
+  # Codex P1 PR #54 修正: list-minds.sh は git で 100644（実行ビット無し）として
+  # tracked されているため、bind mount 経由でも実行ビットが無い。
+  # `docker exec ... /path/to/script` だと permission denied (exit 126) になるので、
+  # 明示的に bash 経由で起動する。
   set +e
-  docker exec ai-org-os-realm /realm/runtime/list-minds.sh >/dev/null 2>&1
+  docker exec ai-org-os-realm bash /realm/runtime/list-minds.sh >/dev/null 2>&1
   rc=$?
   set -e
   assert_ok "list-minds.sh execution" "${rc}"

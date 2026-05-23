@@ -41,12 +41,16 @@ docker compose ps
 ### 2. コンテナ内で既存ツールが動くこと
 
 ```bash
-# Mind 一覧（runtime/list-minds.sh を呼ぶ）
-docker exec ai-org-os-realm /realm/runtime/list-minds.sh
+# Mind 一覧（runtime/list-minds.sh を呼ぶ、bash 経由で実行ビット不要に）
+docker exec ai-org-os-realm bash /realm/runtime/list-minds.sh
 
 # Observatory レポート（runtime/observatory/observe.py を呼ぶ）
 docker exec ai-org-os-realm python3 /realm/runtime/observatory/observe.py
 ```
+
+> 注: shell スクリプト群（`list-minds.sh` / `spawn-mind.sh` / `kill-mind.sh`）は
+> git 上で実行ビット無し（100644）として tracked されているため、bind mount 経由でも
+> 実行ビットが無く、コンテナ内では `bash <script>` 形式で起動する必要があります。
 
 ホスト側で spawn した Mind が見えれば成功（bind mount で同期されている証拠）。
 
