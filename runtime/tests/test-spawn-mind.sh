@@ -18,22 +18,13 @@ PASS=0
 FAIL=0
 FAIL_MSGS=()
 
-# Phase 5b-3 (#78): spawn-mind は runtime/host/config.env を要求するようになった。
-# CI / 通常の test では host setup を走らせていないため、テスト専用の stub config.env
-# を tmp に用意して AI_ORG_OS_HOST_CONFIG で差し替える。
+# Phase 5b-3 (#78): spawn-mind は runtime/host/config.env を要求するため、
+# stub config.env を共有 helper 経由で用意する。
 TEST_TMP_DIR="$(mktemp -d)"
+. "${SCRIPT_DIR}/_lib_host_stub.sh"
+stub_host_config_init "${TEST_TMP_DIR}"
 STUB_PY="${TEST_TMP_DIR}/stub-python.exe"
 STUB_NEXUS="${TEST_TMP_DIR}/stub-nexus.py"
-STUB_CONFIG="${TEST_TMP_DIR}/config.env"
-# stub の中身は空でよい (spawn-mind は存在を確認するだけ、実行はしない)
-touch "${STUB_PY}" "${STUB_NEXUS}"
-cat > "${STUB_CONFIG}" <<CFG
-HOST_PYTHON_BIN=${STUB_PY}
-HOST_NEXUS_PY=${STUB_NEXUS}
-HOST_RUNTIME_DIR=${RUNTIME_DIR}
-HOST_SETUP_AT=test-stub
-CFG
-export AI_ORG_OS_HOST_CONFIG="${STUB_CONFIG}"
 
 cleanup() {
   # このテスト ID で始まる Mindspace をすべて削除

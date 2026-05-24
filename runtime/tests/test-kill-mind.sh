@@ -15,8 +15,14 @@ PASS=0
 FAIL=0
 FAIL_MSGS=()
 
+# Phase 5b-3 (#78): spawn-mind 経由のため stub host config を準備
+TEST_TMP_DIR="$(mktemp -d)"
+. "${SCRIPT_DIR}/_lib_host_stub.sh"
+stub_host_config_init "${TEST_TMP_DIR}"
+
 cleanup() {
   find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "${TEST_TMP_DIR}"
 }
 trap cleanup EXIT
 
