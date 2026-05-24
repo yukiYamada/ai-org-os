@@ -194,8 +194,16 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
 
     既存 snapshot 表 + Inbox queue + Conductor cycle status + 最新 Judgment を
     1 画面に並べる。各セクションは独立に失敗しても残りを描画する。
+
+    Mind 0 件でも "=== Realm Observatory ===" ヘッダは出す
+    (E2E テスト / 統合ビュー識別性のため。Codex P2 CI fix)。
     """
-    sections: list[str] = [_format_table(observations)]
+    sections: list[str] = []
+    if not observations:
+        sections.append("=== Realm Observatory ===")
+        sections.append("  No minds spawned.")
+    else:
+        sections.append(_format_table(observations))
 
     # --- Inbox queue
     try:
