@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""
+Registry Pillar v0.1: Mind Kind Registry。
+
+Warden 起動時に `runtime/kinds/*.md` をスキャンして Kind カタログを構築し、
+Kind 一覧 / 詳細 / 登録チェックを提供する最小実装。
+
+責務:
+- list_kinds(kinds_dir=None) -> list[KindInfo]: 登録済み Kind の列挙
+- get_kind(name, kinds_dir=None) -> KindInfo | None: 指定 Kind の詳細
+- is_registered(name, kinds_dir=None) -> bool: Kind が登録されているか
+
+設計の根拠:
+- ADR-0002: Mind Kind Registry は Warden の責務、Realm の中
+- ADR-0010: Warden は機能の集合体、観測は自由
+- ADR-0011: Pillar は ai-org-os コア、編集不可領域、runtime/pillars/ 配下
+- ADR-0015: 既存 Kind の選択は OK、新規 Kind の動的生成は NG
+
+依存:
+- 標準ライブラリのみ（observation Pillar と同じ依存ゼロ方針）
+- frontmatter (YAML サブセット) の手書きパーサ。kinds/*.md は単純な
+  `key: value` だけを使うので、yaml ライブラリは不要。
+
+Axiom 整合:
+- Mindspace の中身に触れない（runtime/kinds/ のみを読む）
+- Kind は Pillar 領域のメタデータ、Mind の Body スペック定義
+
+Usage:
+  python3 runtime/pillars/registry/registry.py list           # 一覧（表）
+  python3 runtime/pillars/registry/registry.py list --json    # 一覧（JSON）
+  python3 runtime/pillars/registry/registry.py get generic    # 詳細
+  python3 runtime/pillars/registry/registry.py check generic  # exit 0 if registered, exit 1 otherwise
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+# Locate runtime root from this file's path: runtime/pillars/registry/registry.py
+RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
+DEFAULT_KINDS_DIR = RUNTIME_DIR / "kinds"
+
+# spawn-mind.sh の _VALID_NAME_RE と整合させる。
+# Kind name に許される文字: A-Za-z0-9._- のみ、1〜64 文字。
+# これにより `get_kind("../etc")` のような path traversal を弾く。
+_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# frontmatter で読み取るキー。値は str として保持し、欠落時は "?" を返す。
+_FRONTMATTER_KEYS = ("name", "version", "status")
+
+
+class RegistryError(Exception):
+    """Registry 層の汎用エラー（呼び出し側で扱いやすいよう型を切る）。"""
+
+
+@dataclass(frozen=True)
+class KindInfo:
+    """Kind 1 件のメタデータ。"""
+
+    name: str
+    path: Path
+    version: str
+    status: str
+
+
+def _is_valid_name(name: str) -> bool:
+    """Kind 名のバリデーション。path traversal などを弾く。"""
+    return bool(_VALID_NAME_RE.match(name))
+
+
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    """先頭の `---` で挟まれた frontmatter を最小パースする。
+
+    対応する書式:
+      ---
+      key: value
+      key2: value2
+      ---
+
+    YAML の高機能（ネスト, list, quote, multi-line）は使わない。
+    対象 (runtime/kinds/*.md) は単純な key: value のみを使う前提。
+
+    frontmatter が無いファイルは空 dict を返す（呼び出し側で扱う）。
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+
+    result: dict[str, str] = {}
+    for line in lines[1:]:
+        stripped = line.strip()
+        if stripped == "---":
+            return result
+        if not stripped or stripped.startswith("#"):
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        result[key.strip()] = value.strip()
+    # 閉じ `---` が無いケースは frontmatter として認めない（保守的に空を返す）
+    return {}
+
+
+def _read_kind_file(path: Path) -> KindInfo | None:
+    """1 ファイルを KindInfo に変換する。
+
+    frontmatter が無い / 読み取りエラー / kind key 欠落の場合は None を返す。
+    None を返すケースでは標準エラーに warning を出す。
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[WARN] failed to read {path}: {exc}", file=sys.stderr)
+        return None
+
+    fm = _parse_frontmatter(text)
+    if not fm:
+        print(f"[WARN] no frontmatter in {path}, skipping", file=sys.stderr)
+        return None
+
+    # `kind:` が公式キー（generic.md 参照）。`name:` も保険で受ける。
+    kind_name = fm.get("kind") or fm.get("name")
+    if not kind_name:
+        print(
+            f"[WARN] frontmatter missing 'kind' key in {path}, skipping",
+            file=sys.stderr,
+        )
+        return None
+
+    # ファイル名と frontmatter の name が一致することを保証する（不一致は warning）。
+    # 例: generic.md の frontmatter には kind: generic と書く。
+    file_stem = path.stem
+    if kind_name != file_stem:
+        print(
+            f"[WARN] frontmatter kind '{kind_name}' does not match filename "
+            f"'{file_stem}' in {path}; using filename",
+            file=sys.stderr,
+        )
+        kind_name = file_stem
+
+    # filename 由来の name は信頼するが、念のため再バリデーション。
+    if not _is_valid_name(kind_name):
+        print(
+            f"[WARN] kind name '{kind_name}' from {path} is not a valid identifier, "
+            f"skipping",
+            file=sys.stderr,
+        )
+        return None
+
+    return KindInfo(
+        name=kind_name,
+        path=path,
+        version=fm.get("version", "?"),
+        status=fm.get("status", "?"),
+    )
+
+
+def list_kinds(kinds_dir: Path | None = None) -> list[KindInfo]:
+    """`runtime/kinds/*.md` を走査して Kind 一覧を返す。
+
+    - .md 拡張子のみ対象
+    - frontmatter から name / version / status を読む
+    - frontmatter が無い / 不正なものは無視（warning ログのみ）
+    - 結果は name の辞書順でソート（呼び出し側で安定した順序を期待できる）
+
+    冪等性: 同じディレクトリを渡せば、ファイル状態が変わらない限り同じ結果を返す。
+    """
+    target = kinds_dir if kinds_dir is not None else DEFAULT_KINDS_DIR
+    if not target.is_dir():
+        return []
+
+    results: list[KindInfo] = []
+    # iterdir + sort で OS 依存の順序を排除（冪等性のため）。
+    try:
+        entries = sorted(target.iterdir(), key=lambda p: p.name)
+    except OSError as exc:
+        raise RegistryError(f"failed to list {target}: {exc}") from exc
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        if entry.suffix != ".md":
+            continue
+        info = _read_kind_file(entry)
+        if info is not None:
+            results.append(info)
+
+    return results
+
+
+def get_kind(name: str, kinds_dir: Path | None = None) -> KindInfo | None:
+    """指定 Kind の情報を返す。無ければ None。
+
+    name のバリデーション (_VALID_NAME_RE) で path traversal 攻撃を防ぐ。
+    """
+    if not _is_valid_name(name):
+        # 不正な名前は「無い」と等価に扱う（攻撃の足がかりにしない）
+        return None
+
+    target = kinds_dir if kinds_dir is not None else DEFAULT_KINDS_DIR
+    candidate = target / f"{name}.md"
+    if not candidate.is_file():
+        return None
+    return _read_kind_file(candidate)
+
+
+def is_registered(name: str, kinds_dir: Path | None = None) -> bool:
+    """Kind が登録されているか。
+
+    spawn-mind.sh と整合: 登録済み = `runtime/kinds/<name>.md` が存在し、
+    かつ Registry が KindInfo として正しく読み取れる状態。
+    """
+    return get_kind(name, kinds_dir=kinds_dir) is not None
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _format_table(kinds: list[KindInfo]) -> str:
+    if not kinds:
+        return "No kinds registered."
+    lines = [
+        "=== Mind Kind Registry ===",
+        f"  total: {len(kinds)}",
+        "",
+        f"{'NAME':<20} {'VERSION':<10} {'STATUS':<14} PATH",
+    ]
+    for k in kinds:
+        lines.append(f"{k.name:<20} {k.version:<10} {k.status:<14} {k.path}")
+    return "\n".join(lines)
+
+
+def _kind_to_dict(k: KindInfo) -> dict[str, str]:
+    # asdict だと Path がそのまま入って json で落ちるので手動で str 化。
+    d = asdict(k)
+    d["path"] = str(k.path)
+    return d
+
+
+def _cmd_list(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    kinds = list_kinds()
+    if as_json:
+        payload = {"kinds": [_kind_to_dict(k) for k in kinds]}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(_format_table(kinds))
+    return 0
+
+
+def _cmd_get(argv: list[str]) -> int:
+    if not argv:
+        print("[ERROR] 'get' requires a kind name", file=sys.stderr)
+        return 2
+    name = argv[0]
+    as_json = "--json" in argv
+    info = get_kind(name)
+    if info is None:
+        print(f"[ERROR] kind '{name}' is not registered", file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps(_kind_to_dict(info), indent=2, ensure_ascii=False))
+    else:
+        print(f"name:    {info.name}")
+        print(f"version: {info.version}")
+        print(f"status:  {info.status}")
+        print(f"path:    {info.path}")
+    return 0
+
+
+def _cmd_check(argv: list[str]) -> int:
+    if not argv:
+        print("[ERROR] 'check' requires a kind name", file=sys.stderr)
+        return 2
+    name = argv[0]
+    if is_registered(name):
+        return 0
+    return 1
+
+
+def _print_help() -> None:
+    print(
+        "Usage:\n"
+        "  registry.py list [--json]\n"
+        "  registry.py get <name> [--json]\n"
+        "  registry.py check <name>\n"
+        "\n"
+        "Exit codes:\n"
+        "  list:  always 0\n"
+        "  get:   0 = found, 1 = not found, 2 = usage error\n"
+        "  check: 0 = registered, 1 = not registered, 2 = usage error"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in ("-h", "--help"):
+        _print_help()
+        return 0
+
+    subcmd = args[0]
+    rest = args[1:]
+    if subcmd == "list":
+        return _cmd_list(rest)
+    if subcmd == "get":
+        return _cmd_get(rest)
+    if subcmd == "check":
+        return _cmd_check(rest)
+    print(f"[ERROR] unknown subcommand: {subcmd}", file=sys.stderr)
+    _print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
