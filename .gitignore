@@ -42,30 +42,6 @@ coverage/
 # Runtime artifacts
 *.pid
 
-# ai-org-os: generated Mind instances (Mindspaces). Not committed; lifecycle is managed by runtime.
-runtime/minds/*
-!runtime/minds/.gitkeep
-
-# ai-org-os: Nexus storage (Dispatch messages). Not committed; managed at runtime.
-runtime/pillars/conduit/storage/inbox/*
-!runtime/pillars/conduit/storage/inbox/.gitkeep
-runtime/pillars/conduit/storage/archive/*
-!runtime/pillars/conduit/storage/archive/.gitkeep
-
-# ai-org-os: Observation Pillar snapshots (v0.1, ROADMAP). Host-local, not committed.
-runtime/pillars/observation/snapshots/*
-!runtime/pillars/observation/snapshots/.gitkeep
-
-# ai-org-os: Inbox Pillar issues (Phase 5a-5, ADR-0012/0014). Host-local, not committed.
-runtime/issues/inbox/*
-!runtime/issues/inbox/.gitkeep
-runtime/issues/archive/*
-!runtime/issues/archive/.gitkeep
-
-# ai-org-os: Conductor cycle status (Phase 5b-1). Runtime artifact, not committed.
-runtime/realm/conductor-status.json
-runtime/realm/conductor-status.json.tmp
-
 # Python
 *.pyc
 __pycache__/
@@ -75,7 +51,15 @@ runtime/pillars/conduit/.venv/
 # Claude Code agent worktrees (subagent isolation mode) — local-only working dirs
 .claude/
 
-# ai-org-os: host setup artifacts (Phase 5b-3, ADR-0016). Host-specific, not committed.
+# Phase 5b-4 (#81 / ADR-0018) で全 runtime state は $AI_ORG_OS_HOME (default ~/.ai-org-os/)
+# に移動済みなので、repo に runtime artifacts が落ちることは無くなった。
+# 念のため、旧 path に何かが残った場合の保険として:
+runtime/minds/
+runtime/issues/
+runtime/pillars/observation/snapshots/
+runtime/pillars/conduit/storage/
 runtime/host/.venv/
 runtime/host/config.env
 runtime/host/config.env.tmp.*
+runtime/realm/conductor-status.json
+runtime/realm/conductor-status.json.tmp.*

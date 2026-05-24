@@ -7,7 +7,9 @@
 # - Phase 5a-1: 最小コンテナ + bind mount
 # - Phase 5a-2 (ADR-0011): Pillar 群は runtime/pillars/ 配下、bind mount で配信
 # - Phase 5a-3 (#38): Judgment Pillar の anthropic SDK は image に焼く、API key を env パススルー
-# - Phase 5b-1 (#71): Conductor Pillar が常駐 (CMD は Dockerfile 側で設定)、周期環境変数を追加
+# - Phase 5b-1 (#71): Conductor Pillar が常駐
+# - Phase 5b-4 (#81 / ADR-0018): framework (repo) と runtime state ($AI_ORG_OS_HOME)
+#                                を 2 つの bind mount に物理分離
 
 services:
   realm:
@@ -15,15 +17,18 @@ services:
       context: ../..
       dockerfile: runtime/realm/Dockerfile
     container_name: ai-org-os-realm
-    # repo 全体を read-only で参照（ADR 等の文書、テスト等）
-    # runtime/ だけは書き込み可（Mind spawn = runtime/minds/<name>/ 作成、Nexus storage 書込）
+    # bind mount を 2 つに分離 (ADR-0018):
+    #   /realm/repo   = framework code (immutable, read-only)
+    #   /realm/home   = runtime state ($AI_ORG_OS_HOME の中身、read-write)
     volumes:
       - ../../:/realm/repo:ro
-      - ../../runtime:/realm/runtime
-    working_dir: /realm/runtime
+      - "${AI_ORG_OS_HOME:-${HOME}/.ai-org-os}:/realm/home"
+    working_dir: /realm/repo/runtime
     environment:
       # Realm フェーズマーカー。
-      AI_ORG_OS_PHASE: "5b-1"
+      AI_ORG_OS_PHASE: "5b-4"
+      # Phase 5b-4: Container 内では /realm/home が runtime home (bind mount target)。
+      AI_ORG_OS_HOME: "/realm/home"
       # Phase 5a-3 (#38): Judgment Pillar の API key をホスト env からパススルー。
       # 未設定でも Realm 自体は起動する。Conductor が rule-based fallback でカバーする。
       # (Judgment README §「API key の扱い」/ ADR-0013 §1 F3 と整合)

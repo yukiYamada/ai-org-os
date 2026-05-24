@@ -32,11 +32,12 @@ ADR との位置づけ:
 
 | 環境変数 | デフォルト | 用途 |
 |---|---|---|
+| `AI_ORG_OS_HOME` | `~/.ai-org-os/` (container は `/realm/home`) | runtime state root。これを差し替えると issues/snapshots/status 等が一括で変わる (ADR-0018) |
 | `AI_ORG_OS_CONDUCTOR_PERIOD` | `30` | cycle 間隔 (秒) |
 | `AI_ORG_OS_CONDUCTOR_MAX_CYCLES` | `0` (= 無限) | 上限 cycle 数 (テスト用) |
-| `AI_ORG_OS_CONDUCTOR_STATUS_PATH` | `runtime/realm/conductor-status.json` | status JSON 書き込み先 (テスト用) |
-| `AI_ORG_OS_CONDUCTOR_ISSUES_DIR` | `runtime/issues/` | Inbox のルート (テスト用) |
-| `AI_ORG_OS_CONDUCTOR_SNAPSHOTS_DIR` | `runtime/pillars/observation/snapshots/` | snapshot 出力先 (テスト用) |
+| `AI_ORG_OS_CONDUCTOR_STATUS_PATH` | `$AI_ORG_OS_HOME/conductor-status.json` | status JSON 書き込み先を個別 override (テスト用) |
+| `AI_ORG_OS_CONDUCTOR_ISSUES_DIR` | `$AI_ORG_OS_HOME/issues/` | Inbox のルートを個別 override (テスト用) |
+| `AI_ORG_OS_CONDUCTOR_SNAPSHOTS_DIR` | `$AI_ORG_OS_HOME/snapshots/` | snapshot 出力先を個別 override (テスト用) |
 | `ANTHROPIC_API_KEY` | (未設定) | Judgment 用。未設定なら fallback |
 
 ## 起動

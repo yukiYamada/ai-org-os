@@ -14,7 +14,8 @@
 #   - title は 1-200 文字、改行不可。
 #   - priority は p0/p1/p2/p3。未指定なら p2。
 #   - submitter は [A-Za-z0-9._-]{1,64}。未指定なら human。
-#   - 投入された Issue は runtime/issues/inbox/<issue_id>.md に書かれる。
+#   - 投入された Issue は $AI_ORG_OS_HOME/issues/inbox/<issue_id>.md に書かれる
+#     (Phase 5b-4 / ADR-0018、default $HOME/.ai-org-os/issues/inbox/)。
 #   - 成功時、stdout に issue_id を出力する。
 #
 # ADR 整合:

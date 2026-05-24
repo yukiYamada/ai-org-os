@@ -28,10 +28,11 @@ fi
 MIND_NAME="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。runtime/minds/ は
-# RUNTIME_DIR 経由で参照する。
+# Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/ 配下。
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
+DEFAULT_RUNTIME_HOME="${HOME:-${USERPROFILE:-}}/.ai-org-os"
+RUNTIME_HOME="${AI_ORG_OS_HOME:-${DEFAULT_RUNTIME_HOME}}"
+MIND_DIR="${RUNTIME_HOME}/minds/${MIND_NAME}"
 
 if [ ! -d "${MIND_DIR}" ]; then
   echo "[ERROR] Mind '${MIND_NAME}' does not exist (looked for ${MIND_DIR})" >&2

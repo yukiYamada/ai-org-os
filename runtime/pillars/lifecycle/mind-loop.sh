@@ -87,7 +87,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
+# Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/ 配下。
+DEFAULT_RUNTIME_HOME="${HOME:-${USERPROFILE:-}}/.ai-org-os"
+RUNTIME_HOME="${AI_ORG_OS_HOME:-${DEFAULT_RUNTIME_HOME}}"
+MIND_DIR="${RUNTIME_HOME}/minds/${MIND_NAME}"
 LOCK_DIR="${MIND_DIR}/.mind-loop.lock"
 PID_FILE="${MIND_DIR}/.mind-loop.pid"
 LOG_FILE="${MIND_DIR}/mind-loop.log"

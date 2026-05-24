@@ -79,14 +79,18 @@ validate_arg "kind" "${KIND}"
 validate_arg "persona" "${PERSONA}"
 validate_arg "mind-name" "${MIND_NAME}"
 
-# Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下に移動した。
-# runtime/{kinds,personas,minds} および pillars/conduit/ は SCRIPT_DIR から見て
-# `../..` を経由して runtime/ ルートに戻ってからアクセスする。
+# Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。
+# kinds / personas はコード扱いで repo 内 (runtime/{kinds,personas}/)。
+# Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/<name>/ で
+# repo 外、runtime state 扱い。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 KIND_FILE="${RUNTIME_DIR}/kinds/${KIND}.md"
 PERSONA_FILE="${RUNTIME_DIR}/personas/${PERSONA}.md"
-MIND_DIR="${RUNTIME_DIR}/minds/${MIND_NAME}"
+# AI_ORG_OS_HOME を解決 (env or default ~/.ai-org-os)。config.env でも上書きされる。
+DEFAULT_RUNTIME_HOME="${HOME:-${USERPROFILE:-}}/.ai-org-os"
+RUNTIME_HOME="${AI_ORG_OS_HOME:-${DEFAULT_RUNTIME_HOME}}"
+MIND_DIR="${RUNTIME_HOME}/minds/${MIND_NAME}"
 
 if [ ! -f "${KIND_FILE}" ]; then
   echo "[ERROR] Kind '${KIND}' is not registered (looked for ${KIND_FILE})" >&2
@@ -107,9 +111,10 @@ if [ -d "${MIND_DIR}" ]; then
 fi
 
 # Phase 5b-3 (#78): ホスト setup フェーズで生成された config.env を読み込む。
-# config.env が無ければ「setup.sh を先に叩け」と fail (責務分離、ADR-0016)。
+# Phase 5b-4 (#81): config.env は $AI_ORG_OS_HOME/config.env に移動。
+# config.env が無ければ「setup.sh を先に叩け」と fail。
 # テスト用に AI_ORG_OS_HOST_CONFIG env で path を override 可能。
-HOST_CONFIG="${AI_ORG_OS_HOST_CONFIG:-${RUNTIME_DIR}/host/config.env}"
+HOST_CONFIG="${AI_ORG_OS_HOST_CONFIG:-${RUNTIME_HOME}/config.env}"
 if [ ! -f "${HOST_CONFIG}" ]; then
   echo "[ERROR] host setup not done: ${HOST_CONFIG} not found." >&2
   echo "[HINT] Run host setup first: bash ${RUNTIME_DIR}/host/setup.sh" >&2
@@ -194,7 +199,8 @@ cat > "${MIND_DIR}/.mcp.json" <<JSON
       "command": "${HOST_PYTHON_BIN}",
       "args": ["${HOST_NEXUS_PY}"],
       "env": {
-        "AI_ORG_OS_MIND_NAME": "${MIND_NAME}"
+        "AI_ORG_OS_MIND_NAME": "${MIND_NAME}",
+        "AI_ORG_OS_HOME": "${AI_ORG_OS_HOME:-${RUNTIME_HOME}}"
       }
     }
   }

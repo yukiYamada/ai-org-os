@@ -63,7 +63,23 @@ from judgment import (  # noqa: E402
 )
 
 DEFAULT_PERIOD_S = 30
-DEFAULT_STATUS_FILE = RUNTIME_DIR / "realm" / "conductor-status.json"
+
+
+def _runtime_home() -> Path:
+    """$AI_ORG_OS_HOME or ~/.ai-org-os/ (Phase 5b-4 / ADR-0018)。"""
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env)
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os"
+
+
+def _default_status_file() -> Path:
+    return _runtime_home() / "conductor-status.json"
+
+
+# 関数で解決するが、互換のため module-level エイリアスは残す。
+DEFAULT_STATUS_FILE = _default_status_file()
 
 
 @dataclass(frozen=True)
@@ -216,7 +232,7 @@ def write_status(
 
     Realm 統合ビュー (observe.py --realm) がこのファイルを読んで cycle 状態を出す。
     """
-    target_path = target if target is not None else DEFAULT_STATUS_FILE
+    target_path = target if target is not None else _default_status_file()
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = {

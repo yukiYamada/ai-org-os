@@ -20,18 +20,43 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+import os
 import time
 from pathlib import Path
 
-# Locate runtime root from this file's path: runtime/pillars/observation/observe.py
-# Phase 5a-2: 本ファイルは runtime/pillars/observation/ 配下。runtime/ ルートに
-# 戻るには parent を 3 つ遡る必要がある（observation -> pillars -> runtime）。
+# Locate runtime (framework) root from this file's path.
 RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
-MINDS_DIR = RUNTIME_DIR / "minds"
-# Phase 5a-2: Nexus は Conduit Pillar に移動 (runtime/pillars/conduit/storage/)。
-NEXUS_STORAGE = RUNTIME_DIR / "pillars" / "conduit" / "storage"
-INBOX_DIR = NEXUS_STORAGE / "inbox"
-ARCHIVE_DIR = NEXUS_STORAGE / "archive"
+
+
+def _runtime_home() -> Path:
+    """$AI_ORG_OS_HOME or ~/.ai-org-os/ (Phase 5b-4 / ADR-0018)。
+
+    関数化することで、テストが env を切り替えるだけで隔離が効くようにする
+    (module-level の path 定数だと import 時に固定されてしまう)。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env)
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os"
+
+
+def _minds_dir() -> Path:
+    return _runtime_home() / "minds"
+
+
+def _conduit_storage_dir() -> Path:
+    return _runtime_home() / "conduit-storage"
+
+
+def _inbox_dir(mind_name: str | None = None) -> Path:
+    p = _conduit_storage_dir() / "inbox"
+    return p / mind_name if mind_name else p
+
+
+def _archive_dir(mind_name: str | None = None) -> Path:
+    p = _conduit_storage_dir() / "archive"
+    return p / mind_name if mind_name else p
 
 # Make `import mind_status` work without needing a package setup.
 sys.path.insert(0, str(Path(__file__).parent))
@@ -81,16 +106,18 @@ def _latest_mtime(mind_dir: Path) -> float:
 
 
 def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, str]]:
-    """Walk runtime/minds/ and return (observation, status, category) per Mind.
+    """Walk $AI_ORG_OS_HOME/minds/ and return (observation, status, category) per Mind.
 
+    Phase 5b-4 (#81 / ADR-0018): Mindspace 配置は $AI_ORG_OS_HOME 配下。
     Only directories with .mind-meta.md count as real spawned Minds (the
     convention from spawn-mind.sh). Bare dirs are ignored.
     """
     result: list[tuple[MindObservation, str, str]] = []
-    if not MINDS_DIR.is_dir():
+    minds_dir = _minds_dir()
+    if not minds_dir.is_dir():
         return result
 
-    for mind_dir in sorted(MINDS_DIR.iterdir()):
+    for mind_dir in sorted(minds_dir.iterdir()):
         if not mind_dir.is_dir():
             continue
         meta = mind_dir / ".mind-meta.md"
@@ -103,8 +130,8 @@ def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, st
             persona=_read_meta(meta, "persona"),
             spawned_at_epoch=_epoch_from_iso(_read_meta(meta, "spawned_at")),
             last_activity_epoch=_latest_mtime(mind_dir),
-            unread_inbox_count=_count_messages(INBOX_DIR / name),
-            archive_count=_count_messages(ARCHIVE_DIR / name),
+            unread_inbox_count=_count_messages(_inbox_dir(name)),
+            archive_count=_count_messages(_archive_dir(name)),
         )
         result.append(
             (observation, calc_status(observation, now_epoch), calc_category(observation, now_epoch))
