@@ -39,6 +39,72 @@ if [ ! -d "${MIND_DIR}" ]; then
   exit 2
 fi
 
+# Phase 5a-2 / ADR-0010: 外側ループが動いていれば先に停止する。
+#
+# Codex P1 PR #61 (1st): PID 検証なしで kill すると、再利用された PID を持つ
+# 無関係なプロセスを殺してしまう可能性がある。
+#
+# Codex P1 PR #61 (2nd): mind_name を grep -E の regex に直接埋め込むと、
+# valid name に含まれる `.` がワイルドカードになる（abc.def が abcXdef にマッチ）。
+# 修正方針: regex を捨て、/proc/<pid>/cmdline の argv token を NUL 区切りで読み、
+# exact string 一致で判定する（"mind-loop.sh" を末尾に持つ argv と、mind_name と
+# 完全一致する argv の両方が存在することを確認）。
+#
+# /proc が無い環境（macOS/Windows の一部）では best-effort で kill するが警告する。
+verify_loop_owner() {
+  local pid="$1"
+  local mind_name="$2"
+  if [ ! -r "/proc/${pid}/cmdline" ]; then
+    echo "[kill-mind] WARNING: /proc not available, cannot verify pid ${pid} identity (best-effort kill)" >&2
+    return 0
+  fi
+  local has_script=0 has_mind=0 arg
+  while IFS= read -r -d '' arg; do
+    case "${arg}" in
+      mind-loop.sh|*/mind-loop.sh) has_script=1 ;;
+    esac
+    if [ "${arg}" = "${mind_name}" ]; then
+      has_mind=1
+    fi
+  done < "/proc/${pid}/cmdline"
+  if [ "${has_script}" -eq 1 ] && [ "${has_mind}" -eq 1 ]; then
+    return 0
+  fi
+  return 1
+}
+
+PID_FILE="${MIND_DIR}/.mind-loop.pid"
+if [ -f "${PID_FILE}" ]; then
+  LOOP_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${LOOP_PID}" ] && kill -0 "${LOOP_PID}" 2>/dev/null; then
+    if ! verify_loop_owner "${LOOP_PID}" "${MIND_NAME}"; then
+      echo "[kill-mind] WARNING: pid ${LOOP_PID} is alive but does not look like a mind-loop for '${MIND_NAME}'" >&2
+      echo "[kill-mind] Skipping kill to avoid harming an unrelated process. Mindspace will still be removed." >&2
+    else
+      echo "[kill-mind] Stopping mind-loop (pid ${LOOP_PID})"
+      kill -TERM "${LOOP_PID}" 2>/dev/null || true
+      # graceful 終了を待つ
+      WAITED=0
+      while [ "${WAITED}" -lt 5 ]; do
+        if ! kill -0 "${LOOP_PID}" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+        WAITED=$((WAITED + 1))
+      done
+      if kill -0 "${LOOP_PID}" 2>/dev/null; then
+        echo "[kill-mind] Loop did not stop in 5s, sending SIGKILL"
+        # 念のため SIGKILL 前にもう一度検証
+        if verify_loop_owner "${LOOP_PID}" "${MIND_NAME}"; then
+          kill -KILL "${LOOP_PID}" 2>/dev/null || true
+        else
+          echo "[kill-mind] WARNING: pid ${LOOP_PID} no longer looks like our loop; skipping SIGKILL" >&2
+        fi
+      fi
+    fi
+  fi
+fi
+
 echo "[kill-mind] Destroying Mind '${MIND_NAME}' (Mindspace at ${MIND_DIR})"
 rm -rf "${MIND_DIR}"
 echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace is irrecoverable."

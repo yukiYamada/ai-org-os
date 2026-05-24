@@ -220,6 +220,27 @@ else
   echo "  [ok]   missing python: no Mindspace leaked"
 fi
 
+echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
+# --start-loop は spawn 時点で claude バイナリを事前検証する。
+# claude を definitely-not-a-real-binary に差し替え、--start-loop で exit 8 が返ることを検証。
+mind_no_claude="${TEST_ID}-no-claude"
+set +e
+AI_ORG_OS_CLAUDE_BIN="definitely-not-a-real-claude-${TEST_ID}" \
+  "${SPAWN}" --start-loop generic designer "${mind_no_claude}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "missing claude with --start-loop" 8 "${code}"
+# 副作用が起きていないこと: --start-loop なしでは検証されないので、Mindspace 生成前に
+# claude チェックが走ることが重要（python 検証と対称）。Mindspace は作られていないはず。
+if [ -d "${RUNTIME_DIR}/minds/${mind_no_claude}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("missing claude --start-loop: Mindspace should not be created")
+  echo "  [NG]   missing claude --start-loop: Mindspace was created despite failure"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   missing claude --start-loop: no Mindspace leaked"
+fi
+
 # ----- summary ---------------------------------------------------------------
 
 echo ""

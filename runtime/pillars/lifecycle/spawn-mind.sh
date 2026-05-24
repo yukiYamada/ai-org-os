@@ -21,15 +21,43 @@
 #
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "Usage: $0 <kind> <persona> <mind-name>" >&2
+START_LOOP=0
+ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --start-loop)
+      START_LOOP=1
+      shift
+      ;;
+    -h|--help)
+      cat <<HELP
+Usage: $0 [--start-loop] <kind> <persona> <mind-name>
+
+Options:
+  --start-loop   Launch mind-loop.sh in the background after spawning (ADR-0010).
+
+Example:
+  $0 generic designer my-first-mind                 # spawn only, user runs claude manually
+  $0 --start-loop generic designer my-first-mind    # spawn and start the external loop
+HELP
+      exit 0
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "${#ARGS[@]}" -ne 3 ]; then
+  echo "Usage: $0 [--start-loop] <kind> <persona> <mind-name>" >&2
   echo "Example: $0 generic designer my-first-mind" >&2
   exit 1
 fi
 
-KIND="$1"
-PERSONA="$2"
-MIND_NAME="$3"
+KIND="${ARGS[0]}"
+PERSONA="${ARGS[1]}"
+MIND_NAME="${ARGS[2]}"
 
 # Argument validation (regression test for Codex P2 on PR #27).
 # Reject inputs that contain characters which would either:
@@ -89,6 +117,18 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   exit 5
 fi
 
+# --start-loop 指定時は claude バイナリも事前検証する。
+# (mind-loop.sh の exit 4 を spawn 時点で先取り。「spawn 成功 / loop 即死」を防ぐ)
+if [ "${START_LOOP}" = "1" ]; then
+  CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
+  if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
+    echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH." >&2
+    echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path." >&2
+    echo "[HINT] Without claude, the --start-loop option cannot run mind-loop.sh." >&2
+    exit 8
+  fi
+fi
+
 echo "[spawn-mind] Creating Mindspace: ${MIND_DIR}"
 mkdir -p "${MIND_DIR}"
 
@@ -137,10 +177,62 @@ cat > "${MIND_DIR}/.mcp.json" <<JSON
 JSON
 
 echo "[spawn-mind] Mind '${MIND_NAME}' is ready at ${MIND_DIR}"
-echo ""
-echo "Next step (manual):"
-echo "  cd ${MIND_DIR}"
-echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
+
+if [ "${START_LOOP}" = "1" ]; then
+  # --start-loop は mind-loop.sh をバックグラウンド起動する。
+  # nohup + setsid 相当で親プロセス（spawn-mind.sh）の終了に追従させない。
+  # 詳細な loop 仕様は mind-loop.sh / ADR-0010 を参照。
+  LOOP_SCRIPT="${SCRIPT_DIR}/mind-loop.sh"
+  if [ ! -f "${LOOP_SCRIPT}" ]; then
+    echo "[ERROR] mind-loop.sh not found at ${LOOP_SCRIPT}" >&2
+    echo "[HINT] The Mind was spawned successfully but the loop could not be started." >&2
+    exit 7
+  fi
+  echo "[spawn-mind] Starting external loop (mind-loop.sh) in background"
+  # setsid があれば使う、無ければ nohup で代替（コンテナの coreutils 限定環境向け）
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash "${LOOP_SCRIPT}" "${MIND_NAME}" </dev/null >/dev/null 2>&1 &
+  else
+    nohup bash "${LOOP_SCRIPT}" "${MIND_NAME}" </dev/null >/dev/null 2>&1 &
+  fi
+  LOOP_PID=$!
+  disown "${LOOP_PID}" 2>/dev/null || true
+
+  # Codex P1 PR #61: 起動成功を検証する。
+  # mind-loop.sh は lock 取得直後に PID file を書くため、これをシグナルにする。
+  # 最大 1 秒（5 回 × 200ms）待つ。
+  LOOP_PID_FILE="${MIND_DIR}/.mind-loop.pid"
+  verified=0
+  for _ in 1 2 3 4 5; do
+    sleep 0.2
+    if [ -f "${LOOP_PID_FILE}" ]; then
+      verified=1
+      break
+    fi
+  done
+  if [ "${verified}" -ne 1 ]; then
+    echo "[ERROR] mind-loop.sh did not initialize within 1s (pid file ${LOOP_PID_FILE} not found)" >&2
+    echo "[HINT] Mind '${MIND_NAME}' was spawned but its loop is not running." >&2
+    if [ -f "${MIND_DIR}/mind-loop.log" ]; then
+      echo "[HINT] Last 10 lines of mind-loop.log:" >&2
+      tail -10 "${MIND_DIR}/mind-loop.log" >&2 || true
+    fi
+    echo "[HINT] Retry manually: ${SCRIPT_DIR}/mind-loop.sh ${MIND_NAME}" >&2
+    exit 9
+  fi
+  echo "[spawn-mind] Loop started in background (pid ${LOOP_PID}, verified via pid file)"
+  echo "  - Log:    ${MIND_DIR}/mind-loop.log"
+  echo "  - PID:    ${LOOP_PID_FILE} (managed by mind-loop.sh)"
+  echo "  - Stop:   ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}"
+else
+  echo ""
+  echo "Next step (manual):"
+  echo "  cd ${MIND_DIR}"
+  echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
+  echo ""
+  echo "Or start the external loop (ADR-0010):"
+  echo "  ${SCRIPT_DIR}/mind-loop.sh ${MIND_NAME}"
+fi
 echo ""
 echo "Nexus が提供する tool:"
 echo "  - send_dispatch / read_inbox / ack_dispatch"
