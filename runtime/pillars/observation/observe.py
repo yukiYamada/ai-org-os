@@ -254,7 +254,8 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
         sections.append(f"=== Inbox Queue (unavailable: {exc}) ===")
 
     # --- Conductor status
-    status_path = RUNTIME_DIR / "realm" / "conductor-status.json"
+    # Phase 5b-4 (#81 / ADR-0018): conductor-status.json は $AI_ORG_OS_HOME 直下。
+    status_path = _runtime_home() / "conductor-status.json"
     sections.append("")
     if not status_path.is_file():
         sections.append("=== Conductor (not running yet) ===")
