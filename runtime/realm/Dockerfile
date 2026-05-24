@@ -38,4 +38,6 @@ WORKDIR /realm/runtime
 # ANTHROPIC_API_KEY 未設定でも Realm は起動する (Judgment は fallback ルート、
 # ADR-0013 §1 F3 と整合)。
 # 起動を変えたければ `docker compose run --rm realm bash` でシェル起動も可能。
-CMD ["bash", "/realm/runtime/pillars/conductor/conductor.sh"]
+# Phase 5b-4 (#81 / ADR-0018): bind mount target が `/realm/runtime/` から
+# `/realm/repo/runtime/` (ro) に変わった。conductor.sh の path もそれに追従。
+CMD ["bash", "/realm/repo/runtime/pillars/conductor/conductor.sh"]
