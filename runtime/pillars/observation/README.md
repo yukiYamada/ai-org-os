@@ -142,8 +142,10 @@ done
 
 - **snapshots/ は `.gitignore`**（ROADMAP v0.1 §判断ポイント）。観測痕跡はホストローカル、再現性より運用性
 - **TTL prune は自動化しない**。利用者が明示的に `--prune` を呼ぶ。古い記録を消す判断は外側に置く
-- **書き込みは tmp → rename**（atomic）。壊れた JSON を残さない
+- **書き込みは tmp + `os.link` で atomic 予約** — 並行プロセスから同時に呼んでも最終ファイル名が衝突しない（衝突時は counter で別名）
 - **microsecond 衝突は -2/-3 suffix で回避**。`write_snapshot` を高速連打しても重複なし
+- **`--snapshot` と `--prune` は同時指定不可（実質排他）** — 両方渡すと `--prune` が優先され `--snapshot` は実行されない。別々に呼ぶこと
+- **`.tmp` 残骸は次回 `--prune` が掃除**（5 秒経過後）。write_snapshot が途中でクラッシュした場合の保険
 
 詳細仕様: [`ROADMAP.md`](./ROADMAP.md) §「Observation Pillar v0.1」
 

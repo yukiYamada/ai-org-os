@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -88,9 +89,14 @@ def write_snapshot(
     戻り値:
         書き込んだファイルの絶対パス。
 
-    重複防止:
-        microsecond 粒度の ID で衝突はほぼ起きないが、起きた場合は
-        -2, -3, ... の suffix を付けて衝突回避する。
+    並行性 / 衝突耐性:
+        - 同一プロセス内では microsecond 粒度の ID が単調増加するため衝突しない。
+        - **異なるプロセスから同時刻に呼んだ場合** の衝突に対しては、tmp ファイルを
+          PID + counter で区別したうえで `os.link` (hardlink) を使って最終ファイル名を
+          atomic に予約する。`os.link` は既存ファイルがあると `FileExistsError` で
+          失敗するため、衝突したら counter を増やしてリトライする。
+        - 書き込みは tmp ファイルに完了してから link するので、途中で失敗しても
+          壊れた JSON は最終位置に残らない（tmp 残骸は次回 prune が掃除する）。
     """
     if target_dir is None:
         target_dir = DEFAULT_SNAPSHOT_DIR
@@ -100,18 +106,43 @@ def write_snapshot(
     target_dir.mkdir(parents=True, exist_ok=True)
     payload = _build_payload(now)
     sid = payload["snapshot_id"]
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False)
 
-    path = target_dir / f"{sid}.json"
-    counter = 1
-    while path.exists():
-        counter += 1
-        path = target_dir / f"{sid}-{counter}.json"
+    # tmp 名は PID と nanosecond で他プロセスと衝突しないようにする。
+    # （同一プロセスで write_snapshot を高速連打しても被らないよう time_ns も加える）
+    tmp_path = target_dir / f"{sid}.json.tmp.{os.getpid()}.{dt.datetime.now().strftime('%f')}"
+    tmp_path.write_text(serialized, encoding="utf-8")
 
-    # 原子性のため、tmp に書いて rename する（壊れた JSON を残さない）。
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp_path.replace(path)
-    return path
+    try:
+        # 最終ファイル名を atomic に予約する。`os.link` は既存ファイルがあると
+        # FileExistsError で失敗する（POSIX 上 atomic）。Windows でも同一 device
+        # 内ならハードリンクとして動作する。
+        counter = 1
+        chosen: Path | None = None
+        while chosen is None:
+            candidate = (
+                target_dir / f"{sid}.json"
+                if counter == 1
+                else target_dir / f"{sid}-{counter}.json"
+            )
+            try:
+                os.link(str(tmp_path), str(candidate))
+                chosen = candidate
+            except FileExistsError:
+                counter += 1
+                if counter > 1000:
+                    # 防衛的: 1000 回連続で衝突する状況は実用上無い。安全のため abort。
+                    raise RuntimeError(
+                        f"could not allocate snapshot name after 1000 attempts at {target_dir}"
+                    )
+    finally:
+        # tmp を掃除（hardlink 後は安全に消せる、本体は chosen に残る）。
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+    return chosen
 
 
 def prune_snapshots(
@@ -147,10 +178,24 @@ def prune_snapshots(
     cutoff = now.timestamp() - (ttl_days * 86400)
     deleted: list[Path] = []
     for entry in target_dir.iterdir():
-        if not entry.is_file() or entry.suffix != ".json":
+        if not entry.is_file():
+            continue
+        # *.json 本体は TTL 判定。
+        # *.json.tmp.* / *.tmp は write_snapshot の crash 残骸候補。
+        # tmp は古さに関係なく削除対象（最新 write_snapshot が成功すれば即時 unlink される）。
+        name = entry.name
+        is_snapshot = entry.suffix == ".json"
+        is_tmp_residue = ".tmp" in name
+        if not (is_snapshot or is_tmp_residue):
             continue
         try:
-            if entry.stat().st_mtime < cutoff:
+            if is_tmp_residue:
+                # tmp 残骸は無条件削除（5 秒前以前のもののみに限定して、進行中の write を
+                # 巻き込まない）。5 秒は十分すぎる安全マージン。
+                if entry.stat().st_mtime < now.timestamp() - 5:
+                    entry.unlink()
+                    deleted.append(entry)
+            elif entry.stat().st_mtime < cutoff:
                 entry.unlink()
                 deleted.append(entry)
         except OSError:

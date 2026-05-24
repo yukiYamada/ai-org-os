@@ -100,10 +100,31 @@ class TestWriteSnapshot(unittest.TestCase):
         self.assertEqual(data["generated_at"], "2026-05-24T12:00:00Z")
 
     def test_no_tmp_residue_after_write(self) -> None:
-        """書き込みは tmp → rename で原子的。.tmp が残ってないことを確認。"""
+        """書き込み完了後 tmp ファイルが残らない。"""
         write_snapshot(target_dir=self.target, now=FIXED_NOW)
-        residues = list(self.target.glob("*.tmp"))
+        residues = list(self.target.glob("*.tmp*"))
         self.assertEqual(residues, [])
+
+    def test_collision_uses_link_and_increments_counter(self) -> None:
+        """衝突時に os.link が FileExistsError → counter で別名。
+
+        self-review fix: tmp + rename だと race window で snapshot が失われうるが、
+        os.link は atomic に予約するので並行衝突しても両方残る。
+        ここでは事前に sid.json を作っておくことで衝突状況を再現する。
+        """
+        sid = "20260524T120000Z-123456"
+        # 事前に「先客」を置く
+        pre_existing = self.target / f"{sid}.json"
+        pre_existing.write_text("{}", encoding="utf-8")
+
+        # write_snapshot は sid と衝突するので -2 サフィックスを使うはず
+        path = write_snapshot(target_dir=self.target, now=FIXED_NOW)
+        self.assertEqual(path.name, f"{sid}-2.json")
+        # 元のファイルは消えていない
+        self.assertTrue(pre_existing.exists())
+        # 新しいファイルは valid JSON で snapshot_id を持つ
+        loaded = load_snapshot(path)
+        self.assertEqual(loaded["snapshot_id"], sid)
 
 
 class TestPruneSnapshots(unittest.TestCase):
@@ -153,6 +174,28 @@ class TestPruneSnapshots(unittest.TestCase):
         self._write_at_mtime("b.json", now.timestamp() - 1)
         deleted = prune_snapshots(target_dir=self.target, ttl_days=0, now=now)
         self.assertEqual(len(deleted), 2)
+
+    def test_cleans_old_tmp_residue(self) -> None:
+        """self-review fix: prune は 5 秒以上経過した *.tmp* 残骸を掃除する。
+
+        write_snapshot が途中で crash した場合に tmp ファイルが残るが、これを
+        次回 prune で掃除する。進行中の write を巻き込まないよう 5 秒の余白を取る。
+        """
+        now = FIXED_NOW
+        # 古い tmp 残骸（5 秒前以前）
+        old_tmp = self._write_at_mtime("snap.json.tmp.12345.999999", now.timestamp() - 60)
+        # 新しい tmp（進行中の write 想定、5 秒以内なので消さない）
+        new_tmp = self._write_at_mtime("snap2.json.tmp.67890.111111", now.timestamp() - 2)
+        # 通常の json
+        keep = self._write_at_mtime("keep.json", now.timestamp() - 1)
+
+        deleted = prune_snapshots(target_dir=self.target, ttl_days=7, now=now)
+        deleted_names = {p.name for p in deleted}
+        # 古い tmp だけ消える
+        self.assertEqual(deleted_names, {"snap.json.tmp.12345.999999"})
+        self.assertFalse(old_tmp.exists())
+        self.assertTrue(new_tmp.exists(), "fresh tmp must not be deleted")
+        self.assertTrue(keep.exists())
 
     def test_missing_dir_returns_empty(self) -> None:
         nonexistent = self.target / "no_such_subdir"
