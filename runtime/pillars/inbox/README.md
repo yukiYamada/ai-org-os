@@ -55,14 +55,17 @@ runtime/issues/
 └── .gitkeep                  ディレクトリだけ tracked（中身は .gitignore で除外）
 ```
 
-`<issue_id>` は内部生成（`YYYYMMDDTHHMMSSZ-<8 hex>`）。
+`<issue_id>` は内部生成（`YYYYMMDDTHHMMSSZ-<6 digit microsecond>-<8 hex>`）。
 **外部から issue_id を渡す API は存在しない**（path traversal 防御）。
+
+microsecond を含めることで lexicographic sort = 投入順 (FIFO) になる
+（Codex P2 PR #70 修正）。
 
 Issue ファイルの形式（Conduit Pillar の Dispatch と同じく frontmatter + Markdown）:
 
 ```markdown
 ---
-issue_id: 20260524T120000Z-abcdef01
+issue_id: 20260524T120000Z-123456-abcdef01
 title: 短いタイトル
 submitted_at: 2026-05-24T12:00:00Z
 submitter: human

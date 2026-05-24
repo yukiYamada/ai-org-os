@@ -263,6 +263,28 @@ class TestListPendingIssues(unittest.TestCase):
         paths = [r.path for r in records]
         self.assertEqual(paths, [p_a, p_b, p_c])
 
+    def test_fifo_order_within_same_second(self) -> None:
+        """Codex P2 PR #70 fix: 同一秒内でも microsecond 解像度で FIFO 保証。
+
+        旧実装は random 8 hex だけで sort していたため、同一秒の投入は arrival
+        と無関係な順序になっていた。microsecond を ID に含めることで
+        lexicographic = FIFO を担保する。
+        """
+        base = FIXED_NOW  # microsecond = 0
+        # 同じ秒内、microsecond 違いで 3 件投入
+        ts = [
+            base.replace(microsecond=100_000),
+            base.replace(microsecond=500_000),
+            base.replace(microsecond=900_000),
+        ]
+        submit_issue("first",  "1", issues_dir=self.issues_dir, now=ts[0])
+        submit_issue("second", "2", issues_dir=self.issues_dir, now=ts[1])
+        submit_issue("third",  "3", issues_dir=self.issues_dir, now=ts[2])
+
+        records = list_pending_issues(issues_dir=self.issues_dir)
+        self.assertEqual(len(records), 3)
+        self.assertEqual([r.title for r in records], ["first", "second", "third"])
+
     def test_skips_invalid_frontmatter(self) -> None:
         """frontmatter が壊れているファイルはスキップされる（全停止しない）。"""
         inbox = self.issues_dir / "inbox"
@@ -331,7 +353,8 @@ class TestClaimIssue(unittest.TestCase):
         self.assertEqual(rec.path.resolve(), archived)
 
     def test_not_found_for_unknown_id(self) -> None:
-        unknown = "20260524T120000Z-00000000"
+        # New format (Codex P2 PR #70 fix): YYYYMMDDTHHMMSSZ-NNNNNN-<8 hex>
+        unknown = "20260524T120000Z-000000-00000000"
         with self.assertRaises(IssueNotFoundError):
             claim_issue(unknown, issues_dir=self.issues_dir)
 
@@ -487,7 +510,8 @@ class TestCli(unittest.TestCase):
                 "--issues-dir",
                 str(self.issues_dir),
                 "claim",
-                "20260524T120000Z-00000000",
+                # New format (Codex P2 PR #70 fix): YYYYMMDDTHHMMSSZ-NNNNNN-<8 hex>
+                "20260524T120000Z-000000-00000000",
             ]
         )
         self.assertNotEqual(rc, 0)

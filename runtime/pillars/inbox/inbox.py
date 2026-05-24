@@ -49,9 +49,11 @@ SUBMITTER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 ALLOWED_PRIORITIES = ("p0", "p1", "p2", "p3")
 TITLE_MAX_LEN = 200
 
-# 内部生成 issue_id の形式: YYYYMMDDTHHMMSSZ-<8 hex chars>
-# 外部から渡された文字列が「ファイル名として安全か」を検証する用途にも使う。
-ISSUE_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
+# 内部生成 issue_id の形式: YYYYMMDDTHHMMSSZ-<6 digit microsecond>-<8 hex chars>
+# Codex P2 PR #70: secs 粒度だけだと同一秒の submit が file name lexicographic で
+# 順序保証できない (FIFO 違反)。microsecond を間に挟んで「ソート可能性 = 投入順」を
+# 機械的に担保する。8 hex の random 部はそのまま衝突回避用。
+ISSUE_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9]{6}-[0-9a-f]{8}$")
 
 
 class IssueNotFoundError(LookupError):
@@ -89,13 +91,16 @@ def _utcnow() -> dt.datetime:
 def _gen_issue_id(now: dt.datetime | None = None) -> str:
     """内部生成のみ。外部入力にしないことで path traversal を機械的に防ぐ。
 
-    形式: `YYYYMMDDTHHMMSSZ-<8 hex>`。Conduit Pillar の msg_id と同様にソート可能。
+    形式: `YYYYMMDDTHHMMSSZ-NNNNNN-<8 hex>` (NNNNNN は microsecond, 6 桁 0 埋め)。
+    microsecond を含めることで lexicographic sort = FIFO を担保する
+    (Codex P2 PR #70 指摘の修正)。8 hex random は衝突回避用。
     """
     if now is None:
         now = _utcnow()
     ts = now.strftime("%Y%m%dT%H%M%SZ")
-    rand = secrets.token_hex(4)  # 8 hex chars
-    return f"{ts}-{rand}"
+    micro = f"{now.microsecond:06d}"
+    rand = secrets.token_hex(4)
+    return f"{ts}-{micro}-{rand}"
 
 
 def _validate_title(title: str) -> None:
@@ -274,12 +279,12 @@ def submit_issue(
     base = _resolve_issues_dir(issues_dir)
     inbox, _archive = _ensure_dirs(base)
 
-    if now is None:
-        now = _utcnow()
-    submitted_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
     # tmp に書く → os.link で final を予約 → tmp unlink、の atomic パターン。
     # snapshot.py を踏襲。並行プロセス間でも衝突しない。
+    #
+    # Codex P2 PR #70: `now` が呼び出し側から渡されている場合は固定 (テスト用)、
+    # None なら毎回 microsecond ベースで進める (リトライ時に別 ID になる)。
+    fixed_now = now  # 呼び出し時点の値を保持。None なら毎ループで _utcnow()
     attempts = 0
     while True:
         attempts += 1
@@ -287,7 +292,10 @@ def submit_issue(
             raise RuntimeError(
                 f"could not allocate issue_id after 1000 attempts at {inbox}"
             )
-        issue_id = _gen_issue_id(now)
+        current_now = fixed_now if fixed_now is not None else _utcnow()
+        # submitted_at もリトライ間で進める方が誠実 (実際の書き込み時刻)。
+        submitted_at = current_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        issue_id = _gen_issue_id(current_now)
         final_path = inbox / f"{issue_id}.md"
         # PID と microsecond で他プロセスとぶつからない tmp 名にする。
         tmp_name = (
