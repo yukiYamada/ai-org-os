@@ -18,9 +18,27 @@ PASS=0
 FAIL=0
 FAIL_MSGS=()
 
+# Phase 5b-3 (#78): spawn-mind は runtime/host/config.env を要求するようになった。
+# CI / 通常の test では host setup を走らせていないため、テスト専用の stub config.env
+# を tmp に用意して AI_ORG_OS_HOST_CONFIG で差し替える。
+TEST_TMP_DIR="$(mktemp -d)"
+STUB_PY="${TEST_TMP_DIR}/stub-python.exe"
+STUB_NEXUS="${TEST_TMP_DIR}/stub-nexus.py"
+STUB_CONFIG="${TEST_TMP_DIR}/config.env"
+# stub の中身は空でよい (spawn-mind は存在を確認するだけ、実行はしない)
+touch "${STUB_PY}" "${STUB_NEXUS}"
+cat > "${STUB_CONFIG}" <<CFG
+HOST_PYTHON_BIN=${STUB_PY}
+HOST_NEXUS_PY=${STUB_NEXUS}
+HOST_RUNTIME_DIR=${RUNTIME_DIR}
+HOST_SETUP_AT=test-stub
+CFG
+export AI_ORG_OS_HOST_CONFIG="${STUB_CONFIG}"
+
 cleanup() {
   # このテスト ID で始まる Mindspace をすべて削除
   find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "${TEST_TMP_DIR}"
 }
 trap cleanup EXIT
 
@@ -200,25 +218,66 @@ else
   echo "  [ok]   invalid args: no Mindspace leaked"
 fi
 
-echo "[case] 6. python が PATH に無いと exit 5（Nexus 接続不能を事前検知）"
-# Codex P2 (PR #23) 指摘の再発防止。
-# AI_ORG_OS_PYTHON に存在しないコマンドを指定し、command -v で弾かれることを検証。
-mind_no_py="${TEST_ID}-no-py"
+echo "[case] 6. config.env が無いと exit 5（Phase 5b-3 / #78: ホスト setup 未済）"
+# 旧テストは AI_ORG_OS_PYTHON で missing python を検証していたが、
+# Phase 5b-3 で host/config.env 経由に切り替わったため、config.env 不在を検証する。
+mind_no_cfg="${TEST_ID}-no-cfg"
 set +e
-AI_ORG_OS_PYTHON="definitely-not-a-real-binary-${TEST_ID}" \
-  "${SPAWN}" generic designer "${mind_no_py}" >/dev/null 2>&1
+AI_ORG_OS_HOST_CONFIG="/nonexistent/config.env" \
+  "${SPAWN}" generic designer "${mind_no_cfg}" >/dev/null 2>&1
 code=$?
 set -e
-assert_exit_code "missing python" 5 "${code}"
-# 副作用が起きていないこと: Mindspace が作られていないはず（早期失敗）
-if [ -d "${RUNTIME_DIR}/minds/${mind_no_py}" ]; then
+assert_exit_code "missing config.env" 5 "${code}"
+if [ -d "${RUNTIME_DIR}/minds/${mind_no_cfg}" ]; then
   FAIL=$((FAIL + 1))
-  FAIL_MSGS+=("missing python: Mindspace should not be created on failure")
-  echo "  [NG]   missing python: Mindspace was created despite failure"
+  FAIL_MSGS+=("missing config.env: Mindspace should not be created on failure")
+  echo "  [NG]   missing config.env: Mindspace leaked"
 else
   PASS=$((PASS + 1))
-  echo "  [ok]   missing python: no Mindspace leaked"
+  echo "  [ok]   missing config.env: no Mindspace leaked"
 fi
+
+echo "[case] 6b. config.env はあるが HOST_PYTHON_BIN が指すファイルが不在で exit 5"
+broken_cfg="${TEST_TMP_DIR}/broken-config.env"
+cat > "${broken_cfg}" <<CFG
+HOST_PYTHON_BIN=/nonexistent/python.exe
+HOST_NEXUS_PY=${STUB_NEXUS}
+CFG
+mind_bad_py="${TEST_ID}-bad-py"
+set +e
+AI_ORG_OS_HOST_CONFIG="${broken_cfg}" \
+  "${SPAWN}" generic designer "${mind_bad_py}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "HOST_PYTHON_BIN points to missing file" 5 "${code}"
+
+echo "[case] 6c. config.env はあるが HOST_NEXUS_PY が指すファイルが不在で exit 5"
+broken_cfg2="${TEST_TMP_DIR}/broken-config2.env"
+cat > "${broken_cfg2}" <<CFG
+HOST_PYTHON_BIN=${STUB_PY}
+HOST_NEXUS_PY=/nonexistent/nexus.py
+CFG
+mind_bad_nx="${TEST_ID}-bad-nx"
+set +e
+AI_ORG_OS_HOST_CONFIG="${broken_cfg2}" \
+  "${SPAWN}" generic designer "${mind_bad_nx}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "HOST_NEXUS_PY points to missing file" 5 "${code}"
+
+echo "[case] 6d. config.env はあるが HOST_PYTHON_BIN 変数が空で exit 5"
+empty_cfg="${TEST_TMP_DIR}/empty-config.env"
+cat > "${empty_cfg}" <<CFG
+HOST_PYTHON_BIN=
+HOST_NEXUS_PY=${STUB_NEXUS}
+CFG
+mind_empty="${TEST_ID}-empty"
+set +e
+AI_ORG_OS_HOST_CONFIG="${empty_cfg}" \
+  "${SPAWN}" generic designer "${mind_empty}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "HOST_PYTHON_BIN empty" 5 "${code}"
 
 echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
 # --start-loop は spawn 時点で claude バイナリを事前検証する。

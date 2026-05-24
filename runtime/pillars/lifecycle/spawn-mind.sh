@@ -106,14 +106,37 @@ if [ -d "${MIND_DIR}" ]; then
   exit 4
 fi
 
-# Phase 3: Nexus 接続のための python の存在を事前検証する。
-# 検証せずに .mcp.json を書くと、Mind 起動時 (claude 実行時) に MCP 接続が失敗して
-# 「spawn は成功したのに Nexus が使えない」という壊れた Mind が生まれる。
-PYTHON_BIN="${AI_ORG_OS_PYTHON:-python3}"
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "[ERROR] python command '${PYTHON_BIN}' not found in PATH." >&2
-  echo "[HINT] Install Python 3.10+, or set AI_ORG_OS_PYTHON to your python path." >&2
-  echo "[HINT] Without python, the spawned Mind cannot start the Nexus MCP server." >&2
+# Phase 5b-3 (#78): ホスト setup フェーズで生成された config.env を読み込む。
+# config.env が無ければ「setup.sh を先に叩け」と fail (責務分離、ADR-0016)。
+# テスト用に AI_ORG_OS_HOST_CONFIG env で path を override 可能。
+HOST_CONFIG="${AI_ORG_OS_HOST_CONFIG:-${RUNTIME_DIR}/host/config.env}"
+if [ ! -f "${HOST_CONFIG}" ]; then
+  echo "[ERROR] host setup not done: ${HOST_CONFIG} not found." >&2
+  echo "[HINT] Run host setup first: bash ${RUNTIME_DIR}/host/setup.sh" >&2
+  echo "[HINT] (creates host venv + mcp install + resolves OS-native paths)" >&2
+  exit 5
+fi
+# shellcheck source=/dev/null
+. "${HOST_CONFIG}"
+
+# config.env に必要な変数が揃っているか検証
+if [ -z "${HOST_PYTHON_BIN:-}" ] || [ -z "${HOST_NEXUS_PY:-}" ]; then
+  echo "[ERROR] ${HOST_CONFIG} is missing HOST_PYTHON_BIN or HOST_NEXUS_PY." >&2
+  echo "[HINT] Re-run: bash ${RUNTIME_DIR}/host/setup.sh --recreate-venv" >&2
+  exit 5
+fi
+
+# Mind が Nexus を stdio で起動できるか念のため確認 (file 存在)。
+# HOST_PYTHON_BIN は OS ネイティブパス (Windows: C:/..., Unix: /...)。
+# `command -v` は POSIX path しか解決できないので、ファイル存在で代用する。
+if [ ! -f "${HOST_PYTHON_BIN}" ]; then
+  echo "[ERROR] HOST_PYTHON_BIN '${HOST_PYTHON_BIN}' (from config.env) is not a file." >&2
+  echo "[HINT] Re-run: bash ${RUNTIME_DIR}/host/setup.sh --recreate-venv" >&2
+  exit 5
+fi
+if [ ! -f "${HOST_NEXUS_PY}" ]; then
+  echo "[ERROR] HOST_NEXUS_PY '${HOST_NEXUS_PY}' (from config.env) is not a file." >&2
+  echo "[HINT] Re-run: bash ${RUNTIME_DIR}/host/setup.sh" >&2
   exit 5
 fi
 
@@ -150,24 +173,26 @@ phase: 1+3
 Phase 5 以降は Warden がより構造化された形で管理します。
 EOF
 
-# Phase 3: Nexus (MCP server) への接続設定を Mindspace に配置
-# Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）
-# PYTHON_BIN は上方で存在検証済み。
+# Phase 3 + 5b-3: Nexus (MCP server) への接続設定を Mindspace に配置。
+# Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）。
+# パスはホスト setup フェーズ (host/setup.sh) で OS ネイティブ形式に解決済の
+# HOST_PYTHON_BIN / HOST_NEXUS_PY を使う。spawn-mind 側はパス形式を意識しない。
 #
 # AI_ORG_OS_MIND_NAME env var binds the Nexus stdio subprocess to this Mind's
 # identity (Issue #19, ADR-0008). The Nexus then rejects send_dispatch /
 # read_inbox / ack_dispatch calls whose from_mind / mind_name does not match
 # this binding, preventing one Mind from impersonating another via crafted
 # arguments.
-NEXUS_PY="${RUNTIME_DIR}/pillars/conduit/nexus.py"
-echo "[spawn-mind] Installing Nexus MCP config (.mcp.json) using '${PYTHON_BIN}', bound to '${MIND_NAME}'"
+echo "[spawn-mind] Installing Nexus MCP config (.mcp.json), bound to '${MIND_NAME}'"
+echo "  python: ${HOST_PYTHON_BIN}"
+echo "  nexus:  ${HOST_NEXUS_PY}"
 cat > "${MIND_DIR}/.mcp.json" <<JSON
 {
   "mcpServers": {
     "nexus": {
       "type": "stdio",
-      "command": "${PYTHON_BIN}",
-      "args": ["${NEXUS_PY}"],
+      "command": "${HOST_PYTHON_BIN}",
+      "args": ["${HOST_NEXUS_PY}"],
       "env": {
         "AI_ORG_OS_MIND_NAME": "${MIND_NAME}"
       }
