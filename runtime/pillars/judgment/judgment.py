@@ -183,11 +183,20 @@ def _parse_response(text: str, expected_names: list[str]) -> list[MindJudgment]:
         )
         seen.add(mind_name)
 
-    # 期待された Mind 名が出力に含まれていない場合は warning ではなく fail（呼び出し側で fallback）。
+    # Codex P1 PR #65: 期待 Mind 名と出力 Mind 名は **完全一致** を要求する。
+    # missing (expected - seen): 一部判定が抜けている → fallback 必要
+    # unknown (seen - expected): Claude が hallucinated Mind を出した → fallback 必要
+    # どちらも downstream で「存在しない Mind に action」を防ぐ防御。
     missing = expected_set - seen
-    if missing:
+    unknown = seen - expected_set
+    if missing or unknown:
+        parts = []
+        if missing:
+            parts.append(f"missing: {sorted(missing)}")
+        if unknown:
+            parts.append(f"unknown (hallucinated): {sorted(unknown)}")
         raise JudgmentParseError(
-            f"missing judgments for: {sorted(missing)}\nraw: {raw_snippet}"
+            f"mind_name set mismatch — {', '.join(parts)}\nraw: {raw_snippet}"
         )
 
     return result

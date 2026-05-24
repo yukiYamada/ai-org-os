@@ -148,6 +148,31 @@ class TestParseResponse(unittest.TestCase):
             _parse_response(text, ["alice", "bob"])
         self.assertIn("bob", str(ctx.exception))
 
+    def test_unknown_mind_raises(self) -> None:
+        """Codex P1 PR #65: Claude が hallucinated Mind を返したら fail。
+
+        旧実装は missing (expected - seen) しか見てなかったので、expected を全て
+        含みつつ extra な mind_name が混ざっていても通過した。今は seen - expected
+        も検証して unknown を弾く。
+        """
+        text = (
+            '[{"mind_name":"alice","action":"ok","reason":"r"},'
+            '{"mind_name":"ghost","action":"investigate","reason":"hallucinated"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("ghost", str(ctx.exception))
+        self.assertIn("unknown", str(ctx.exception).lower())
+
+    def test_missing_and_unknown_both_reported(self) -> None:
+        """missing と unknown が同時にあれば両方 message に含まれる。"""
+        text = '[{"mind_name":"ghost","action":"ok","reason":"r"}]'
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        msg = str(ctx.exception)
+        self.assertIn("alice", msg)  # missing
+        self.assertIn("ghost", msg)  # unknown
+
     def test_reason_truncated_at_200(self) -> None:
         long = "x" * 500
         text = f'[{{"mind_name":"alice","action":"ok","reason":"{long}"}}]'
