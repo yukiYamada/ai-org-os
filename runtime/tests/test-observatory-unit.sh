@@ -16,4 +16,6 @@ fi
 PYTHON_BIN="$(command -v python3 || command -v python)"
 
 cd "${OBSERVATORY_DIR}"
-"${PYTHON_BIN}" -m unittest test_mind_status -v 2>&1
+# unittest discover で test_*.py を全部拾う（test_mind_status / test_snapshot 等）。
+# observe.py や snapshot.py をモジュールとして import するため CWD は維持。
+"${PYTHON_BIN}" -m unittest discover -p 'test_*.py' -v 2>&1

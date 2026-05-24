@@ -7,9 +7,12 @@ of all spawned Minds with status / category. Standard library only.
 
 Usage:
   python3 runtime/pillars/observation/observe.py
-  python3 runtime/pillars/observation/observe.py --json   # machine-readable
+  python3 runtime/pillars/observation/observe.py --json     # machine-readable
+  python3 runtime/pillars/observation/observe.py --snapshot # write JSON snapshot file
+  python3 runtime/pillars/observation/observe.py --prune    # delete old snapshots (TTL days)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
+v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
 """
 
 from __future__ import annotations
@@ -170,13 +173,57 @@ def _format_json(observations: list[tuple[MindObservation, str, str]]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def _parse_int_option(argv: list[str], name: str, default: int) -> int:
+    """Minimal `--name VALUE` parser. Raises SystemExit(2) on malformed input."""
+    if name not in argv:
+        return default
+    idx = argv.index(name)
+    if idx + 1 >= len(argv):
+        print(f"[ERROR] {name} requires an integer argument", file=sys.stderr)
+        raise SystemExit(2)
+    raw = argv[idx + 1]
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"[ERROR] {name} must be an integer (got '{raw}')", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     as_json = "--json" in argv
+    as_snapshot = "--snapshot" in argv
+    as_prune = "--prune" in argv
 
     now_epoch = time.time()
-    observations = gather_observations(now_epoch)
 
+    if as_prune:
+        # v0.1: TTL prune は --snapshot とは独立なサブコマンド扱い。
+        # 自動削除はせず、利用者が明示的に呼ぶ（ROADMAP v0.1 の要件）。
+        from snapshot import prune_snapshots, DEFAULT_TTL_DAYS
+
+        ttl = _parse_int_option(argv, "--ttl-days", DEFAULT_TTL_DAYS)
+        deleted = prune_snapshots(ttl_days=ttl)
+        for p in deleted:
+            print(f"deleted: {p}")
+        print(f"[prune] removed {len(deleted)} snapshot(s) older than {ttl} day(s)", file=sys.stderr)
+        return 0
+
+    if as_snapshot:
+        from snapshot import load_snapshot, write_snapshot
+
+        # Codex P2 PR #62: 旧実装は write_snapshot 後に gather_observations を再度呼んで
+        # stdout に出していたが、その間に Mind の状態が変わると saved file と stdout が
+        # divergent になりうる（特に 5 分 / 1 時間の status しきい値跨ぎで）。
+        # 修正: 書き込んだファイルを読み戻して同じ payload を stdout に流す。
+        path = write_snapshot()
+        print(f"[snapshot] wrote {path}", file=sys.stderr)
+        # 利用者が pipe で次の処理に流せるよう、stdout には保存した JSON を出す。
+        payload = load_snapshot(path)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    observations = gather_observations(now_epoch)
     if as_json:
         print(_format_json(observations))
     else:
