@@ -64,6 +64,13 @@ Phase 5a 着手（Issue #35）で「Warden 機能を実装する Claude」をフ
 
 これらの名前は本 ADR で確定したものではなく **Phase 5a 着手時に確定**する。本 ADR では「Pillar というカテゴリ語」と「編集不可の境界」を確定する。
 
+> **2026-05-24 追記 (Phase 5b-1 / #71)**:
+> Phase 5b-1 で **Conductor Pillar** を追加。Warden の心拍 (周期実行 orchestrator)
+> を担い、Observation / Inbox / Judgment / Lifecycle 等の Pillar を 1 cycle ずつ
+> 呼ぶ常駐エンジン。`runtime/pillars/conductor/` 配下、本 ADR §1 で確定した
+> 「Pillar カテゴリ + 編集不可境界」をそのまま適用する。
+> 詳細: `runtime/pillars/conductor/README.md` を参照。
+
 ### 3. ファイル配置の境界
 
 **コア vs 拡張の境界をファイル配置で明示**する：
@@ -85,7 +92,8 @@ runtime/
 │   ├── conduit/            ← Conduit Pillar の実体（既存 nexus を移動 or 参照）
 │   ├── judgment/           ← Judgment Pillar の実体（Phase 5a-3）
 │   ├── registry/           ← Registry Pillar の実体（Phase 5a-4）
-│   └── inbox/              ← Inbox Pillar の実体（Phase 5a-5）
+│   ├── inbox/              ← Inbox Pillar の実体（Phase 5a-5）
+│   └── conductor/          ← Conductor Pillar の実体（Phase 5b-1、Warden の心拍、2026-05-24 追記）
 │
 ├── observatory/            ← 暫定実装（Phase 5a-2 で pillars/observation/ に統合）
 ├── nexus/                  ← 暫定実装（Phase 5a-2 で pillars/conduit/ に統合）

@@ -10,24 +10,30 @@
 このディレクトリは **ai-org-os コアが提供する Warden 構成要素** の置き場です。
 配下のファイルは **編集不可** として扱います（CODEOWNERS / pre-commit / CI で機械的に強制する予定。Phase 5a-2 時点では文書による宣言）。
 
-## 配置（Phase 5a-2 時点）
+## 配置（Phase 5b-1 時点）
 
 ```
 runtime/pillars/
-├── observation/   ← Observation Pillar（Realm 観測：mtime / メッセージ件数 / kind / persona）
-├── lifecycle/     ← Lifecycle Pillar（Mind の spawn / kill / list）
-└── conduit/       ← Conduit Pillar（Mind 間 Dispatch を仲介する MCP server＝旧 Nexus）
+├── observation/   ← Realm 観測：mtime / メッセージ件数 / snapshot 履歴
+├── lifecycle/     ← Mind の spawn / kill / list / 外側ループ
+├── conduit/       ← Mind 間 Dispatch を仲介する MCP server (旧 Nexus)
+├── judgment/      ← Warden 内部 Claude (Anthropic SDK 直叩き、決定論的)
+├── registry/      ← Mind Kind カタログ列挙
+├── inbox/         ← 人間 → Realm への入力経路
+└── conductor/     ← Warden の心拍 (各 Pillar を周期で呼ぶ常駐エンジン)
 ```
 
 各 Pillar の責務は ADR-0011 §3 「Pillar 一覧」を参照。
 
-将来追加される Pillar（Phase 5a-3 以降）:
-
-| Pillar | 責務 | 関連 Issue |
+| Pillar | 責務 | 起票 Issue / 実装 PR |
 |---|---|---|
-| Judgment | Warden 内部 Claude（Anthropic SDK 直叩き）。Realm 全体の判断を担当 | #38 |
-| Registry | Mind Kind / Persona のレジストリを Warden に統合 | #39 |
-| Inbox | Realm 外部からの Issue / Dispatch 投入インターフェース | #40 |
+| Observation | Realm 観測、snapshot 履歴 | Phase 5a-2 (#37) / Observation v0.1 (#42) |
+| Lifecycle | Mind spawn / kill / list + 外側ループ | Phase 5a-2 (#37) / Mind loop (#41) |
+| Conduit | Mind 間 Dispatch (MCP server) | Phase 5a-2 (#37) |
+| Judgment | Anthropic SDK 直叩きの判断 | Phase 5a-3 (#38) |
+| Registry | Kind カタログ列挙 | Phase 5a-4 (#39) |
+| Inbox | 人間 → Realm 入力経路 | Phase 5a-5 (#40) |
+| **Conductor** | **Warden の心拍 (周期実行 orchestrator)** | **Phase 5b-1 (#71)** |
 
 ## なぜ「編集不可」なのか
 
