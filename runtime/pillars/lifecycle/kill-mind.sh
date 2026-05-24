@@ -40,25 +40,37 @@ if [ ! -d "${MIND_DIR}" ]; then
 fi
 
 # Phase 5a-2 / ADR-0010: 外側ループが動いていれば先に停止する。
-# Codex P1 PR #61: PID 検証なしで kill すると、再利用された PID を持つ無関係な
-# プロセスを殺してしまう可能性がある。/proc/<pid>/cmdline でこの PID が本当に
-# mind-loop.sh で MIND_NAME を扱っているかを確認する（Linux）。
+#
+# Codex P1 PR #61 (1st): PID 検証なしで kill すると、再利用された PID を持つ
+# 無関係なプロセスを殺してしまう可能性がある。
+#
+# Codex P1 PR #61 (2nd): mind_name を grep -E の regex に直接埋め込むと、
+# valid name に含まれる `.` がワイルドカードになる（abc.def が abcXdef にマッチ）。
+# 修正方針: regex を捨て、/proc/<pid>/cmdline の argv token を NUL 区切りで読み、
+# exact string 一致で判定する（"mind-loop.sh" を末尾に持つ argv と、mind_name と
+# 完全一致する argv の両方が存在することを確認）。
+#
 # /proc が無い環境（macOS/Windows の一部）では best-effort で kill するが警告する。
 verify_loop_owner() {
   local pid="$1"
   local mind_name="$2"
-  local cmdline=""
-  if [ -r "/proc/${pid}/cmdline" ]; then
-    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-    if echo "${cmdline}" | grep -qE "mind-loop\.sh( |$)" && \
-       echo "${cmdline}" | grep -qE "(^| )${mind_name}( |$)"; then
-      return 0
-    fi
-    return 1
+  if [ ! -r "/proc/${pid}/cmdline" ]; then
+    echo "[kill-mind] WARNING: /proc not available, cannot verify pid ${pid} identity (best-effort kill)" >&2
+    return 0
   fi
-  # /proc 不在環境: best-effort で続行（macOS/Windows の bash 環境向け）。
-  echo "[kill-mind] WARNING: /proc not available, cannot verify pid ${pid} identity (best-effort kill)" >&2
-  return 0
+  local has_script=0 has_mind=0 arg
+  while IFS= read -r -d '' arg; do
+    case "${arg}" in
+      mind-loop.sh|*/mind-loop.sh) has_script=1 ;;
+    esac
+    if [ "${arg}" = "${mind_name}" ]; then
+      has_mind=1
+    fi
+  done < "/proc/${pid}/cmdline"
+  if [ "${has_script}" -eq 1 ] && [ "${has_mind}" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 PID_FILE="${MIND_DIR}/.mind-loop.pid"

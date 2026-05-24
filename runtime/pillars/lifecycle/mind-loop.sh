@@ -104,6 +104,11 @@ fi
 # 「pidfile が指す PID が live でない」ことを根拠にする。
 # 旧実装は `mkdir` ← race window → `echo $$ > PID_FILE` の隙間で 2 つ目の loop が
 # pidfile 空を「stale」と誤判定して並列実行が起きうる問題があった。
+#
+# Codex P2 PR #61 (2nd): kill -0 で alive を確認するだけでは、PID 再利用された
+# 無関係なプロセスがその PID を持っているケースで永久に exit 3（lock blocked）に
+# なる。argv token exact match で「本当に mind-loop か」を確認してから決める。
+# kill-mind.sh の verify_loop_owner と同ロジック。
 acquire_lock() {
   if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
     return 1
@@ -112,6 +117,29 @@ acquire_lock() {
   # 意味するように。
   echo "$$" > "${PID_FILE}"
   return 0
+}
+
+verify_loop_owner() {
+  local pid="$1"
+  local mind_name="$2"
+  if [ ! -r "/proc/${pid}/cmdline" ]; then
+    # /proc 不在環境（macOS/Windows の bash 等）: best-effort。生存しているなら
+    # 同一 Mind の loop として扱う（false positive 寄り、stale lock を回避する側）。
+    return 0
+  fi
+  local has_script=0 has_mind=0 arg
+  while IFS= read -r -d '' arg; do
+    case "${arg}" in
+      mind-loop.sh|*/mind-loop.sh) has_script=1 ;;
+    esac
+    if [ "${arg}" = "${mind_name}" ]; then
+      has_mind=1
+    fi
+  done < "/proc/${pid}/cmdline"
+  if [ "${has_script}" -eq 1 ] && [ "${has_mind}" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 if ! acquire_lock; then
@@ -131,13 +159,18 @@ if ! acquire_lock; then
   fi
 
   if [ -n "${EXISTING_PID}" ] && kill -0 "${EXISTING_PID}" 2>/dev/null; then
-    echo "[ERROR] Mind '${MIND_NAME}' already has a loop running (pid ${EXISTING_PID})" >&2
-    echo "[HINT] Stop it first: ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}" >&2
-    exit 3
+    # alive な PID。argv token で「本当に同一 Mind の mind-loop か」を確認する。
+    if verify_loop_owner "${EXISTING_PID}" "${MIND_NAME}"; then
+      echo "[ERROR] Mind '${MIND_NAME}' already has a loop running (pid ${EXISTING_PID})" >&2
+      echo "[HINT] Stop it first: ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}" >&2
+      exit 3
+    fi
+    # alive だが mind-loop ではない（PID 再利用された無関係なプロセス）→ stale 扱い
+    echo "[mind-loop] pid ${EXISTING_PID} is alive but not a mind-loop for '${MIND_NAME}', treating as stale" >&2
   fi
 
-  # ここまで来た = pidfile が live process を指していない。stale 確定として reclaim。
-  echo "[mind-loop] stale lock detected (no live process), reclaiming..." >&2
+  # ここまで来た = pidfile が live mind-loop を指していない。stale 確定として reclaim。
+  echo "[mind-loop] stale lock detected, reclaiming..." >&2
   rm -rf "${LOCK_DIR}"
   rm -f "${PID_FILE}"
   if ! acquire_lock; then
