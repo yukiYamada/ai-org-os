@@ -96,6 +96,15 @@ class Nexus:
                 f"but {field}='{claimed}' was requested"
             )
 
+    def assert_identity(self, claimed: str, field: str = "mind_name") -> None:
+        """Public alias for _authorize.
+
+        Phase 5b-2 (#75): Nexus 以外の Pillar (Inbox 等) の wrapper tool でも同じ
+        identity binding を効かせるための公開 API。`_authorize` は internal helper
+        として残す (既存呼び出し側の互換のため)。
+        """
+        self._authorize(claimed, field)
+
     # ---- operations ----------------------------------------------------------
 
     def send_dispatch(

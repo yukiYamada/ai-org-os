@@ -355,61 +355,137 @@ def list_pending_issues(
     return records
 
 
+def _inject_claim_metadata(text: str, claimer: str, claimed_at: str) -> str:
+    """frontmatter に claimed_by と claimed_at を追記した本文を返す。
+
+    既に claimed_by がある場合（再 claim、通常起きないがありえる）は上書きする。
+    frontmatter が壊れていれば原文を返す（claim 自体は archive 移動で成立しているため）。
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    end_idx: int | None = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        return text
+
+    # 既存 claimed_by / claimed_at を除外して残りを保持。
+    kept: list[str] = []
+    for line in lines[1:end_idx]:
+        stripped = line.strip()
+        if stripped.startswith("claimed_by:") or stripped.startswith("claimed_at:"):
+            continue
+        kept.append(line)
+
+    new_fm = ["---"]
+    new_fm.extend(kept)
+    new_fm.append(f"claimed_by: {claimer}")
+    new_fm.append(f"claimed_at: {claimed_at}")
+    new_fm.append("---")
+    new_fm.extend(lines[end_idx + 1:])
+    return "\n".join(new_fm) + ("\n" if text.endswith("\n") else "")
+
+
 def claim_issue(
     issue_id: str,
     issues_dir: Path | None = None,
+    *,
+    claimer: str | None = None,
+    now: dt.datetime | None = None,
 ) -> IssueRecord:
     """Issue を archive に移動して「処理開始」をマークする。
 
     引数:
-        issue_id: 内部生成形式 (YYYYMMDDTHHMMSSZ-<8 hex>) のみ受理。
+        issue_id: 内部生成形式 (YYYYMMDDTHHMMSSZ-NNNNNN-<8 hex>) のみ受理。
                   形式違反は IssueValidationError、inbox に無いものは IssueNotFoundError。
+        claimer: claim した主体の識別子 (Mind 名)。指定すれば archive 側 frontmatter に
+                 `claimed_by: <name>` / `claimed_at: <ISO>` が追記される (ADR-0017 §1 traceability)。
+                 None なら frontmatter は原文のまま (後方互換)。
+        now: claimed_at に使う時刻。テストで固定するため。
 
     戻り値:
-        archive 側に置かれた IssueRecord（path は archive のもの）。
+        archive 側に置かれた IssueRecord。
 
     例外:
-        IssueValidationError: issue_id 形式違反。
-        IssueNotFoundError:   inbox に該当ファイルが無い（未投入 or 既に claim 済み）。
+        IssueValidationError: issue_id 形式違反 / claimer 形式違反。
+        IssueNotFoundError:   inbox に該当ファイルが無い。
 
     並行性:
-        - `Path.rename` は POSIX 上 atomic（src と dst が同一 device の inbox/archive）。
-        - 2 つの並行 claim が同じ Issue を取りに来た場合、先着が rename に成功し、
-          後着は FileNotFoundError → IssueNotFoundError として再生される。
-        - archive に既存ファイルがあれば（ありえないが防御層として）reject する。
+        - `os.link` は POSIX/Windows どちらでも「dst が既存なら FileExistsError」で
+          atomic に失敗する。これで「先着が link 成功 → unlink で src を消す」を保証。
+        - 並行する 2 つの claim は片方が必ず FileExistsError → IssueNotFoundError。
+
+    claimer 付き claim の場合:
+        - inbox 側ファイルを読んで frontmatter に claimed_by / claimed_at を追記
+        - tmp ファイルに書く → os.link で archive 側を atomic 予約 → src を unlink
+        - claimer なしと同じ並行性保証を維持
     """
     _validate_issue_id(issue_id)
+    if claimer is not None:
+        _validate_submitter(claimer)  # claimer も同じ文字集合
     base = _resolve_issues_dir(issues_dir)
     inbox, archive = _ensure_dirs(base)
 
     src = inbox / f"{issue_id}.md"
     dst = archive / f"{issue_id}.md"
 
-    # claim の atomic 化は os.link + os.unlink の 2 段で行う。
-    # `os.rename` は POSIX 上 atomic だが、Windows では `os.rename(src, dst)` で
-    # dst が既存だと失敗する一方、並行する 2 つの rename を機械的に区別できない
-    # ケースがあり、`dst.exists()` 事前チェックでは race window が残る。
-    # 対して `os.link` は POSIX/Windows どちらでも「dst が既存なら FileExistsError」
-    # で atomic に失敗する（POSIX は `link(2)`、Windows は CreateHardLinkW）。
-    # これで「先着が link 成功 → unlink で src を消す」を保証できる。
-    try:
-        os.link(str(src), str(dst))
-    except FileExistsError as exc:
-        # dst が既に存在 = 既に誰かが archive に移動した（二重 claim）。
-        raise IssueNotFoundError(
-            f"issue '{issue_id}' is already archived (double claim?)"
-        ) from exc
-    except FileNotFoundError as exc:
-        # src が存在しない = 未投入 or 先行 claim が完了済み。
-        raise IssueNotFoundError(f"issue '{issue_id}' not in inbox") from exc
+    if claimer is None:
+        # 既存パス: 中身そのままで os.link → unlink
+        try:
+            os.link(str(src), str(dst))
+        except FileExistsError as exc:
+            raise IssueNotFoundError(
+                f"issue '{issue_id}' is already archived (double claim?)"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise IssueNotFoundError(f"issue '{issue_id}' not in inbox") from exc
+        try:
+            src.unlink()
+        except FileNotFoundError:
+            pass
+    else:
+        # claimer 付き: 中身を読んで claimed_by を注入、tmp → atomic link → src unlink
+        if now is None:
+            now = _utcnow()
+        claimed_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            original_text = src.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise IssueNotFoundError(f"issue '{issue_id}' not in inbox") from exc
 
-    # ここまで来たら dst は確実に存在する。src を unlink して claim を完了。
-    try:
-        src.unlink()
-    except FileNotFoundError:
-        # 先行 claim が src を消した（極めて稀。link 成功後に競合）。
-        # archive 側に自分が link した本体は残るので claim は有効。
-        pass
+        new_text = _inject_claim_metadata(original_text, claimer, claimed_at)
+        tmp_name = (
+            f"{issue_id}.md.tmp.claim."
+            f"{os.getpid()}."
+            f"{dt.datetime.now().strftime('%f')}."
+            f"{secrets.token_hex(2)}"
+        )
+        tmp_path = archive / tmp_name
+        tmp_path.write_text(new_text, encoding="utf-8")
+        try:
+            os.link(str(tmp_path), str(dst))
+        except FileExistsError as exc:
+            # 二重 claim: 既に archive に居る → tmp を消して報告
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise IssueNotFoundError(
+                f"issue '{issue_id}' is already archived (double claim?)"
+            ) from exc
+        # tmp は不要 (archive 側に hardlink が残っている)
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        # src を消して claim 完了 (src が既に消えていても archive 側は有効)
+        try:
+            src.unlink()
+        except FileNotFoundError:
+            pass
 
     rec = _parse_issue_file(dst)
     if rec is None:
@@ -461,7 +537,11 @@ def _cmd_submit(args: argparse.Namespace) -> int:
 def _cmd_claim(args: argparse.Namespace) -> int:
     issues_dir = Path(args.issues_dir) if args.issues_dir else None
     try:
-        rec = claim_issue(args.issue_id, issues_dir=issues_dir)
+        rec = claim_issue(
+            args.issue_id,
+            issues_dir=issues_dir,
+            claimer=args.claimer,
+        )
     except IssueValidationError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2
@@ -509,6 +589,12 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     p_claim = sub.add_parser("claim", help="Issue を archive に移して処理開始")
     p_claim.add_argument("issue_id", help="claim 対象の issue_id")
+    p_claim.add_argument(
+        "--claimer",
+        default=None,
+        help="claim した主体名 (Mind 名)。指定すれば frontmatter に "
+             "claimed_by/claimed_at を追記する (ADR-0017 §1 traceability)。",
+    )
     p_claim.set_defaults(func=_cmd_claim)
 
     ns = parser.parse_args(list(argv) if argv is not None else None)

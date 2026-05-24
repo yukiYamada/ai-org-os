@@ -365,6 +365,61 @@ class TestClaimIssue(unittest.TestCase):
         with self.assertRaises(IssueNotFoundError):
             claim_issue(issue_id, issues_dir=self.issues_dir)
 
+    def test_claim_with_claimer_records_metadata(self) -> None:
+        """Phase 5b-2 (#75): claimer 指定で frontmatter に claimed_by/claimed_at が追記される。"""
+        path = submit_issue("t", "body content", issues_dir=self.issues_dir)
+        issue_id = path.stem
+        fixed_now = dt.datetime(2026, 5, 24, 3, 0, 0, tzinfo=dt.timezone.utc)
+
+        rec = claim_issue(
+            issue_id,
+            issues_dir=self.issues_dir,
+            claimer="alice",
+            now=fixed_now,
+        )
+
+        # 戻り値は archive 側のパス
+        archived = (self.issues_dir / "archive" / f"{issue_id}.md").resolve()
+        self.assertEqual(rec.path.resolve(), archived)
+        # inbox からは消えた
+        self.assertFalse(path.exists())
+
+        # archive ファイルに claimed_by / claimed_at が追記されている
+        content = archived.read_text(encoding="utf-8")
+        self.assertIn("claimed_by: alice", content)
+        self.assertIn("claimed_at: 2026-05-24T03:00:00Z", content)
+        # 元の body は残っている
+        self.assertIn("body content", content)
+        # 元の他フィールドも残っている
+        self.assertIn(f"issue_id: {issue_id}", content)
+        self.assertIn("title: t", content)
+        self.assertIn("submitter: human", content)
+
+    def test_claim_with_invalid_claimer_raises(self) -> None:
+        """claimer も submitter と同じ文字集合検証。"""
+        path = submit_issue("t", "b", issues_dir=self.issues_dir)
+        issue_id = path.stem
+        bad_claimers = ["", "has space", "../escape", "x" * 65, "日本語"]
+        for bad in bad_claimers:
+            with self.subTest(claimer=bad):
+                with self.assertRaises(IssueValidationError):
+                    claim_issue(issue_id, issues_dir=self.issues_dir, claimer=bad)
+
+    def test_double_claim_with_claimer_raises(self) -> None:
+        """claimer 付き claim も二重 claim 拒否する (atomic 維持)。"""
+        path = submit_issue("t", "b", issues_dir=self.issues_dir)
+        issue_id = path.stem
+        claim_issue(issue_id, issues_dir=self.issues_dir, claimer="alice")
+        with self.assertRaises(IssueNotFoundError):
+            claim_issue(issue_id, issues_dir=self.issues_dir, claimer="bob")
+
+    def test_claim_with_claimer_leaves_no_tmp_residue(self) -> None:
+        """claim 完了後 *.tmp.claim.* 残骸が残らない。"""
+        path = submit_issue("t", "b", issues_dir=self.issues_dir)
+        claim_issue(path.stem, issues_dir=self.issues_dir, claimer="alice")
+        residues = list((self.issues_dir / "archive").glob("*.tmp.*"))
+        self.assertEqual(residues, [])
+
     def test_rejects_invalid_issue_id_format(self) -> None:
         """path traversal / 危険文字を含む issue_id は形式チェックで弾く。"""
         bad_ids = [
