@@ -158,6 +158,46 @@ class TestParseResponse(unittest.TestCase):
         result = _parse_response("[]", [])
         self.assertEqual(result, [])
 
+    def test_fence_does_not_corrupt_backtick_in_reason(self) -> None:
+        """self-review fix (#65): JSON 本文中の backtick が fence 剥がしで壊されない。
+
+        旧実装の `raw.strip("\\`")` は文字単位で全 backtick を消すので、reason 内に
+        backtick が含まれる場合に JSON が壊れた。新実装は行単位で剥がす。
+        """
+        # reason に backtick を含む。fence で囲まれた典型応答
+        text = (
+            '```json\n'
+            '[{"mind_name":"alice","action":"ok","reason":"use `grep` here"}]\n'
+            '```'
+        )
+        result = _parse_response(text, ["alice"])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].reason, "use `grep` here")
+
+    def test_empty_mind_name_raises(self) -> None:
+        """self-review fix (#65): 空文字 mind_name は不正。"""
+        text = '[{"mind_name":"","action":"ok","reason":"r"}]'
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("empty mind_name", str(ctx.exception))
+
+    def test_duplicate_mind_name_raises(self) -> None:
+        """self-review fix (#65): 同じ mind_name を 2 回返したら fail。"""
+        text = (
+            '[{"mind_name":"alice","action":"ok","reason":"r1"},'
+            '{"mind_name":"alice","action":"investigate","reason":"r2"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("duplicate mind_name", str(ctx.exception))
+
+    def test_parse_error_includes_raw_snippet(self) -> None:
+        """self-review fix (#65): 例外メッセージに raw response 抜粋を含めて debug 性を上げる。"""
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response("not json at all", ["alice"])
+        # 例外メッセージに raw 内容のヒントが含まれる
+        self.assertIn("not json", str(ctx.exception))
+
 
 class TestJudgeSnapshot(unittest.TestCase):
     def test_empty_minds_short_circuits(self) -> None:

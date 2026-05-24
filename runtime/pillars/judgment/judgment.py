@@ -112,50 +112,83 @@ def _build_user_prompt(snapshot: dict) -> str:
     )
 
 
+def _strip_markdown_fence(text: str) -> str:
+    r"""先頭・末尾の ``` フェンスを行単位で剥がす。
+
+    self-review fix (#65): 旧実装は `raw.strip("\`")` だったが、これは文字単位なので
+    JSON 本文中の backtick (reason フィールド内の `\`grep\`` 等) も巻き込んで壊す。
+    行単位なら本文を傷つけずに済む。
+    """
+    lines = text.splitlines()
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].rstrip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def _parse_response(text: str, expected_names: list[str]) -> list[MindJudgment]:
     """Claude の応答を MindJudgment のリストに変換する。
 
-    フォーマット違反は JudgmentParseError で raise。
+    フォーマット違反は JudgmentParseError で raise。debug のため raw 先頭 500 文字を
+    例外メッセージに含める。
     """
-    raw = text.strip()
-    # Markdown fences が付いてしまった場合の defensive parsing。
-    if raw.startswith("```"):
-        raw = raw.strip("`").strip()
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
+    raw = _strip_markdown_fence(text.strip())
+    # raw_snippet は debug 用に例外に乗せるための短縮版。
+    raw_snippet = raw[:500] + ("..." if len(raw) > 500 else "")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise JudgmentParseError(f"response is not valid JSON: {exc}") from exc
+        raise JudgmentParseError(
+            f"response is not valid JSON: {exc}\nraw: {raw_snippet}"
+        ) from exc
 
     if not isinstance(parsed, list):
-        raise JudgmentParseError(f"expected JSON array at top level, got {type(parsed).__name__}")
+        raise JudgmentParseError(
+            f"expected JSON array at top level, got {type(parsed).__name__}\nraw: {raw_snippet}"
+        )
+
+    # self-review fix (#65): expected_names も dedup + truthy filter する。
+    # Claude が duplicate / 空文字を返した場合の防御として set 比較を確実にする。
+    expected_set = {n for n in expected_names if n}
 
     result: list[MindJudgment] = []
     seen: set[str] = set()
     for i, entry in enumerate(parsed):
         if not isinstance(entry, dict):
-            raise JudgmentParseError(f"entry {i} is not an object")
+            raise JudgmentParseError(f"entry {i} is not an object\nraw: {raw_snippet}")
         for key in ("mind_name", "action", "reason"):
             if key not in entry:
-                raise JudgmentParseError(f"entry {i} missing key '{key}'")
+                raise JudgmentParseError(
+                    f"entry {i} missing key '{key}'\nraw: {raw_snippet}"
+                )
+        mind_name = str(entry["mind_name"])
+        if not mind_name:
+            raise JudgmentParseError(f"entry {i} has empty mind_name\nraw: {raw_snippet}")
         if entry["action"] not in VALID_ACTIONS:
             raise JudgmentParseError(
-                f"entry {i} has invalid action '{entry['action']}' (allowed: {sorted(VALID_ACTIONS)})"
+                f"entry {i} has invalid action '{entry['action']}' "
+                f"(allowed: {sorted(VALID_ACTIONS)})\nraw: {raw_snippet}"
+            )
+        if mind_name in seen:
+            raise JudgmentParseError(
+                f"entry {i} has duplicate mind_name '{mind_name}'\nraw: {raw_snippet}"
             )
         result.append(
             MindJudgment(
-                mind_name=str(entry["mind_name"]),
+                mind_name=mind_name,
                 action=str(entry["action"]),
                 reason=str(entry["reason"])[:200],
             )
         )
-        seen.add(str(entry["mind_name"]))
+        seen.add(mind_name)
 
     # 期待された Mind 名が出力に含まれていない場合は warning ではなく fail（呼び出し側で fallback）。
-    missing = set(expected_names) - seen
+    missing = expected_set - seen
     if missing:
-        raise JudgmentParseError(f"missing judgments for: {sorted(missing)}")
+        raise JudgmentParseError(
+            f"missing judgments for: {sorted(missing)}\nraw: {raw_snippet}"
+        )
 
     return result
 
@@ -214,7 +247,8 @@ def judge_snapshot(
     if not minds:
         return []
 
-    expected_names = [m["mind_name"] for m in minds if "mind_name" in m]
+    # self-review fix (#65): 空文字 / None の mind_name を弾く。`m.get` は欠落で None を返す。
+    expected_names = [str(m["mind_name"]) for m in minds if m.get("mind_name")]
 
     if client is None:
         client = make_client()
