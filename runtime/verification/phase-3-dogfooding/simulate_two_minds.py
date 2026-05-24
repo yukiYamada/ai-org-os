@@ -18,7 +18,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-NEXUS_DIR = Path(__file__).resolve().parents[2] / "nexus"
+# Phase 5a-2 (ADR-0011): Nexus は Conduit Pillar に移動
+# (runtime/pillars/conduit/storage.py)。
+NEXUS_DIR = Path(__file__).resolve().parents[2] / "pillars" / "conduit"
 sys.path.insert(0, str(NEXUS_DIR))
 
 from storage import Nexus  # noqa: E402

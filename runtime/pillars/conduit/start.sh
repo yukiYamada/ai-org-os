@@ -10,9 +10,9 @@
 #   - venv に依存を閉じ込めてホストの Python 環境を汚さない
 #
 # 用法:
-#   ./runtime/nexus/start.sh                  # 起動（デフォルトの stdio transport）
-#   ./runtime/nexus/start.sh --setup-only     # venv 作成と依存インストールまで
-#   ./runtime/nexus/start.sh --recreate-venv  # 既存 venv を破棄して作り直し
+#   ./runtime/pillars/conduit/start.sh                  # 起動（デフォルトの stdio transport）
+#   ./runtime/pillars/conduit/start.sh --setup-only     # venv 作成と依存インストールまで
+#   ./runtime/pillars/conduit/start.sh --recreate-venv  # 既存 venv を破棄して作り直し
 #
 set -euo pipefail
 

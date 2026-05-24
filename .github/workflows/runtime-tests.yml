@@ -30,10 +30,10 @@ jobs:
       - name: chmod scripts
         # Windows でコミットされた実行ビットが落ちている可能性に備えて。
         run: |
-          chmod +x runtime/spawn-mind.sh
-          chmod +x runtime/kill-mind.sh
-          chmod +x runtime/list-minds.sh
-          chmod +x runtime/nexus/start.sh
+          chmod +x runtime/pillars/lifecycle/spawn-mind.sh
+          chmod +x runtime/pillars/lifecycle/kill-mind.sh
+          chmod +x runtime/pillars/lifecycle/list-minds.sh
+          chmod +x runtime/pillars/conduit/start.sh
           chmod +x runtime/tests/run-tests.sh
           chmod +x runtime/tests/test-*.sh
 

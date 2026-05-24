@@ -4,7 +4,7 @@
 
 **Phase 5a-1 の実体**：ai-org-os の Realm を Docker コンテナとして起動する最小定義。
 
-Pillar 群（Observation / Lifecycle / Conduit / Judgment / Registry / Inbox、[ADR-0011](../../docs/adr/0011-warden-claude-naming-and-separation.md)）はまだ常駐していない。本 Phase は **「Realm という容器がそこにある」状態の確立** に絞る。
+Pillar 群（Observation / Lifecycle / Conduit / Judgment / Registry / Inbox、[ADR-0011](../../docs/adr/0011-warden-claude-naming-and-separation.md)）の **Observation / Lifecycle / Conduit は Phase 5a-2 で `runtime/pillars/` 配下に配置済み**（常駐はまだ）。Judgment / Registry / Inbox は Phase 5a-3 以降。本 Phase は **「Realm という容器がそこにある」状態の確立** に絞る。
 
 ## 構成
 
@@ -41,11 +41,11 @@ docker compose ps
 ### 2. コンテナ内で既存ツールが動くこと
 
 ```bash
-# Mind 一覧（runtime/list-minds.sh を呼ぶ、bash 経由で実行ビット不要に）
-docker exec ai-org-os-realm bash /realm/runtime/list-minds.sh
+# Mind 一覧（runtime/pillars/lifecycle/list-minds.sh を呼ぶ、bash 経由で実行ビット不要に）
+docker exec ai-org-os-realm bash /realm/runtime/pillars/lifecycle/list-minds.sh
 
-# Observatory レポート（runtime/observatory/observe.py を呼ぶ）
-docker exec ai-org-os-realm python3 /realm/runtime/observatory/observe.py
+# Observatory レポート（runtime/pillars/observation/observe.py を呼ぶ）
+docker exec ai-org-os-realm python3 /realm/runtime/pillars/observation/observe.py
 ```
 
 > 注: shell スクリプト群（`list-minds.sh` / `spawn-mind.sh` / `kill-mind.sh`）は
@@ -75,7 +75,7 @@ docker compose down --rmi all
 
 **含まれる**:
 - Realm コンテナの起動定義
-- 既存 runtime/ ツール（list-minds / spawn-mind / kill-mind / observatory / nexus）が bind mount 経由で動くこと
+- 既存 Pillar 群（`runtime/pillars/lifecycle/{spawn,kill,list}-mind.sh`、`runtime/pillars/observation/observe.py`、`runtime/pillars/conduit/`）が bind mount 経由で動くこと（Phase 5a-2 以降の配置）
 - bind mount による書き込み伝播（コンテナ内で spawn した Mind がホストにも見える）
 
 **含まれない**（Phase 5a-2 以降で追加）：

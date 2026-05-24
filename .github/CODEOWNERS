@@ -1,0 +1,35 @@
+# CODEOWNERS — ai-org-os
+#
+# 目的: ai-org-os コア領域（runtime/pillars/）への変更は必ずリポジトリオーナーの
+# レビューを通す。Phase 5a-2 / ADR-0011 「Pillar は ai-org-os コアが提供し、編集不可」
+# を機械的に近づけるための一段階（merge-time gate）。
+#
+# 構文: <pattern> <owner1> <owner2> ...
+# - 先勝ちではなく後勝ち（同一 pattern にマッチしたとき後の行が優先）
+# - GitHub の CODEOWNERS は .github/, docs/, ルートのいずれに置いてもよい
+#
+# 運用上の注意（重要）:
+# - PR 作者は自分の PR をレビューできない（GitHub 仕様）。オーナー単独運用の段階で
+#   Branch protection の "Require review from Code Owners" を ON にすると、
+#   オーナー自身の PR が永久に止まる。
+# - Phase 5a-2 時点では本ファイルは **諮問機能（reviewer 候補の自動提示）として運用** し、
+#   Branch protection 側での強制は別 Issue で別途検討する。
+# - 強制を入れる際の選択肢: (1) 別ハンドル追加、(2) "Allow specified actors to bypass
+#   required pull requests" にオーナーを追加、(3) その他。詳細は
+#   runtime/pillars/README.md §「機械的な保護」を参照。
+
+# ---- Pillar (Warden コア構成要素) — 編集不可領域。Mind / Realm 利用者からの直接編集は禁止
+runtime/pillars/                @yukiYamada
+runtime/pillars/**              @yukiYamada
+
+# ---- ADR / 設計（不変項に関わる文書）も同様にオーナー必須
+docs/adr/                       @yukiYamada
+docs/adr/**                     @yukiYamada
+
+# ---- ai-org-os の Realm 起動定義（環境境界）はカスタム可だが、変更は告知してから
+runtime/realm/                  @yukiYamada
+runtime/realm/**                @yukiYamada
+
+# ---- CI / hooks 設定の改変も同オーナー（CI 迂回防止）
+.github/                        @yukiYamada
+.github/**                      @yukiYamada

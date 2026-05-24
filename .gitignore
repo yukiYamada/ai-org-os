@@ -47,13 +47,13 @@ runtime/minds/*
 !runtime/minds/.gitkeep
 
 # ai-org-os: Nexus storage (Dispatch messages). Not committed; managed at runtime.
-runtime/nexus/storage/inbox/*
-!runtime/nexus/storage/inbox/.gitkeep
-runtime/nexus/storage/archive/*
-!runtime/nexus/storage/archive/.gitkeep
+runtime/pillars/conduit/storage/inbox/*
+!runtime/pillars/conduit/storage/inbox/.gitkeep
+runtime/pillars/conduit/storage/archive/*
+!runtime/pillars/conduit/storage/archive/.gitkeep
 
 # Python
 *.pyc
 __pycache__/
 *.egg-info/
-runtime/nexus/.venv/
+runtime/pillars/conduit/.venv/

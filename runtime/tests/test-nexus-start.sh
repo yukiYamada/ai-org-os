@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test-nexus-start.sh — runtime/nexus/start.sh の振る舞いを検証する。
+# test-nexus-start.sh — runtime/pillars/conduit/start.sh の振る舞いを検証する。
 #
 # 軸（pr-self-review checklist より）:
 #   - 引数バリデーション（不明オプションは exit 1）
@@ -14,7 +14,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NEXUS_DIR="$(cd "${SCRIPT_DIR}/../nexus" && pwd)"
+NEXUS_DIR="$(cd "${SCRIPT_DIR}/../pillars/conduit" && pwd)"
 START="${NEXUS_DIR}/start.sh"
 
 if [ ! -x "${START}" ]; then
