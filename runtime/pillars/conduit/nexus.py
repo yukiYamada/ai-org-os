@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -32,6 +33,18 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from storage import AuthorizationError, Nexus
+
+# Phase 5b-2 (#75): Inbox Pillar への cross-pillar import。
+# ADR-0017 §5「Mind 側に Inbox 取り込み経路を提供」のために、Conduit Pillar が
+# Mind 向け MCP tool として inbox.py の関数を wrap する。
+_RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_RUNTIME_DIR / "pillars" / "inbox"))
+from inbox import (  # noqa: E402
+    IssueNotFoundError,
+    IssueValidationError,
+    claim_issue as _inbox_claim_issue,
+    list_pending_issues as _inbox_list_pending,
+)
 
 # Identity binding (Issue #19, ADR-0008):
 #   When spawn-mind.sh launches this Nexus as a stdio subprocess for a single
@@ -93,6 +106,40 @@ async def list_tools() -> list[Tool]:
                 "required": ["mind_name", "msg_id"],
             },
         ),
+        # Phase 5b-2 (#75 / ADR-0017): Mind が自分で人間からの Issue を取り込む経路。
+        # send_dispatch / read_inbox は Mind 同士の Dispatch 用。これとは別に、
+        # 人間が runtime/issues/inbox/ に置いた Issue を Mind が読み・claim する tool。
+        Tool(
+            name="read_pending_issues",
+            description=(
+                "List pending Issues that humans have submitted to the Realm Inbox "
+                "(under runtime/issues/inbox/). These are different from Mind-to-Mind "
+                "dispatches read by read_inbox. Each Mind decides for itself whether "
+                "to claim an Issue based on its Persona (ADR-0017 layer B)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="claim_issue",
+            description=(
+                "Claim a pending Issue from the Realm Inbox. The Issue is moved from "
+                "runtime/issues/inbox/ to runtime/issues/archive/ with claimed_by=<your "
+                "Mind name> and claimed_at recorded in its frontmatter. Atomic — a "
+                "concurrent claim by another Mind will fail with not-found."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mind_name": {"type": "string", "description": "Your Mind name."},
+                    "issue_id": {"type": "string", "description": "issue_id to claim."},
+                },
+                "required": ["mind_name", "issue_id"],
+            },
+        ),
     ]
 
 
@@ -111,6 +158,42 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
             result = _nexus.read_inbox(mind_name=args["mind_name"])
         elif name == "ack_dispatch":
             result = _nexus.ack_dispatch(mind_name=args["mind_name"], msg_id=args["msg_id"])
+        elif name == "read_pending_issues":
+            # Phase 5b-2: 人間 Inbox の Issue 一覧。identity binding は不要
+            # (read-only、公開キュー、ADR-0017 §3「Mind が自分で取りに行く」)。
+            records = _inbox_list_pending()
+            result = {
+                "ok": True,
+                "count": len(records),
+                "issues": [
+                    {
+                        "issue_id": r.issue_id,
+                        "title": r.title,
+                        "submitter": r.submitter,
+                        "priority": r.priority,
+                        "submitted_at": r.submitted_at,
+                        "body": r.body,
+                    }
+                    for r in records
+                ],
+            }
+        elif name == "claim_issue":
+            # Phase 5b-2: mind_name は identity binding でチェック済。
+            # claimed_by として archive に書き込まれる (ADR-0017 §1 traceability)。
+            mind_name = args["mind_name"]
+            _nexus.assert_identity(mind_name)  # ADR-0008 enforcement
+            rec = _inbox_claim_issue(args["issue_id"], claimer=mind_name)
+            result = {
+                "ok": True,
+                "issue_id": rec.issue_id,
+                "title": rec.title,
+                "submitter": rec.submitter,
+                "priority": rec.priority,
+                "submitted_at": rec.submitted_at,
+                "claimed_by": mind_name,
+                "body": rec.body,
+                "archived_path": str(rec.path),
+            }
         else:
             result = {"ok": False, "error": f"unknown tool: {name}"}
     except KeyError as exc:
@@ -121,6 +204,10 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
         # PermissionError raised by underlying fs operations
         # (Codex P2 PR #27 follow-up).
         result = {"ok": False, "error": str(exc), "code": "forbidden"}
+    except IssueValidationError as exc:
+        result = {"ok": False, "error": str(exc), "code": "invalid_input"}
+    except IssueNotFoundError as exc:
+        result = {"ok": False, "error": str(exc), "code": "not_found"}
     except ValueError as exc:
         result = {"ok": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
