@@ -22,6 +22,11 @@ runtime/realm/
 - **ホストユーザーが `claude code login` 済** — Mind を起動する際に必要 ([ADR-0016](../../docs/adr/0016-mind-auth-and-host-container-boundary.md))
 - (任意) `ANTHROPIC_API_KEY` env var — Judgment Pillar 用。未設定でも Realm は起動するが Conductor の判定は fallback 経路になる
 
+## End-to-End 手動確認ガイド
+
+実際に「Issue 投入 → Mind が claim → 痕跡を確認」を 10 分でやる手順は
+[`docs/manual-e2e-guide.md`](../../docs/manual-e2e-guide.md) に整理してある。
+
 ## 認証経路の整理
 
 | 主体 | 認証 | 起動場所 |
