@@ -40,26 +40,55 @@ if [ ! -d "${MIND_DIR}" ]; then
 fi
 
 # Phase 5a-2 / ADR-0010: 外側ループが動いていれば先に停止する。
-# pid file に書かれた PID に SIGTERM を送り、最大 5 秒待ってから SIGKILL に上げる。
-# pid file が無いか、PID が既に死んでいれば skip。
+# Codex P1 PR #61: PID 検証なしで kill すると、再利用された PID を持つ無関係な
+# プロセスを殺してしまう可能性がある。/proc/<pid>/cmdline でこの PID が本当に
+# mind-loop.sh で MIND_NAME を扱っているかを確認する（Linux）。
+# /proc が無い環境（macOS/Windows の一部）では best-effort で kill するが警告する。
+verify_loop_owner() {
+  local pid="$1"
+  local mind_name="$2"
+  local cmdline=""
+  if [ -r "/proc/${pid}/cmdline" ]; then
+    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    if echo "${cmdline}" | grep -qE "mind-loop\.sh( |$)" && \
+       echo "${cmdline}" | grep -qE "(^| )${mind_name}( |$)"; then
+      return 0
+    fi
+    return 1
+  fi
+  # /proc 不在環境: best-effort で続行（macOS/Windows の bash 環境向け）。
+  echo "[kill-mind] WARNING: /proc not available, cannot verify pid ${pid} identity (best-effort kill)" >&2
+  return 0
+}
+
 PID_FILE="${MIND_DIR}/.mind-loop.pid"
 if [ -f "${PID_FILE}" ]; then
   LOOP_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
   if [ -n "${LOOP_PID}" ] && kill -0 "${LOOP_PID}" 2>/dev/null; then
-    echo "[kill-mind] Stopping mind-loop (pid ${LOOP_PID})"
-    kill -TERM "${LOOP_PID}" 2>/dev/null || true
-    # graceful 終了を待つ
-    WAITED=0
-    while [ "${WAITED}" -lt 5 ]; do
-      if ! kill -0 "${LOOP_PID}" 2>/dev/null; then
-        break
+    if ! verify_loop_owner "${LOOP_PID}" "${MIND_NAME}"; then
+      echo "[kill-mind] WARNING: pid ${LOOP_PID} is alive but does not look like a mind-loop for '${MIND_NAME}'" >&2
+      echo "[kill-mind] Skipping kill to avoid harming an unrelated process. Mindspace will still be removed." >&2
+    else
+      echo "[kill-mind] Stopping mind-loop (pid ${LOOP_PID})"
+      kill -TERM "${LOOP_PID}" 2>/dev/null || true
+      # graceful 終了を待つ
+      WAITED=0
+      while [ "${WAITED}" -lt 5 ]; do
+        if ! kill -0 "${LOOP_PID}" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+        WAITED=$((WAITED + 1))
+      done
+      if kill -0 "${LOOP_PID}" 2>/dev/null; then
+        echo "[kill-mind] Loop did not stop in 5s, sending SIGKILL"
+        # 念のため SIGKILL 前にもう一度検証
+        if verify_loop_owner "${LOOP_PID}" "${MIND_NAME}"; then
+          kill -KILL "${LOOP_PID}" 2>/dev/null || true
+        else
+          echo "[kill-mind] WARNING: pid ${LOOP_PID} no longer looks like our loop; skipping SIGKILL" >&2
+        fi
       fi
-      sleep 1
-      WAITED=$((WAITED + 1))
-    done
-    if kill -0 "${LOOP_PID}" 2>/dev/null; then
-      echo "[kill-mind] Loop did not stop in 5s, sending SIGKILL"
-      kill -KILL "${LOOP_PID}" 2>/dev/null || true
     fi
   fi
 fi

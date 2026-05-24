@@ -99,30 +99,69 @@ if [ ! -d "${MIND_DIR}" ]; then
 fi
 
 # 二重起動の atomic ロック。
-# 旧実装は (1) PID file の存在チェック → (2) kill -0 → (3) PID file 書き込み の TOCTOU
-# があった。`mkdir` は POSIX 上 atomic なので、これを lock として使う。
-# lock が取れなかった = 別 loop が走っている → exit 3。
-# stale lock（前回が SIGKILL 等で落ちて lock が残った場合）は PID file 経由でチェック。
-if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-  # lock 取れず → 既存 loop が居るか、stale lock か判定
+# `mkdir` は POSIX 上 atomic なので、これを lock として使う。
+# Codex P1 PR #61: lock 取得直後に PID を書き、stale 判定は pidfile の有無ではなく
+# 「pidfile が指す PID が live でない」ことを根拠にする。
+# 旧実装は `mkdir` ← race window → `echo $$ > PID_FILE` の隙間で 2 つ目の loop が
+# pidfile 空を「stale」と誤判定して並列実行が起きうる問題があった。
+acquire_lock() {
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    return 1
+  fi
+  # lock 取得直後に PID を書く。後続の検証で pidfile 空が常に「未初期化中」を
+  # 意味するように。
+  echo "$$" > "${PID_FILE}"
+  return 0
+}
+
+if ! acquire_lock; then
+  # lock 取れず。pidfile を見て stale 判定する。
   EXISTING_PID=""
   if [ -f "${PID_FILE}" ]; then
     EXISTING_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
   fi
+
+  # pidfile が空 = lock を握った先住プロセスが PID 書き込み前にクラッシュした、
+  # または別 loop が初期化中（race）。安全側に振り、200ms 待って再判定する。
+  if [ -z "${EXISTING_PID}" ]; then
+    sleep 0.2
+    if [ -f "${PID_FILE}" ]; then
+      EXISTING_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+    fi
+  fi
+
   if [ -n "${EXISTING_PID}" ] && kill -0 "${EXISTING_PID}" 2>/dev/null; then
     echo "[ERROR] Mind '${MIND_NAME}' already has a loop running (pid ${EXISTING_PID})" >&2
     echo "[HINT] Stop it first: ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}" >&2
     exit 3
   fi
-  # stale lock: 前回の loop が SIGKILL で落ちた等。lock を奪って続行。
+
+  # ここまで来た = pidfile が live process を指していない。stale 確定として reclaim。
   echo "[mind-loop] stale lock detected (no live process), reclaiming..." >&2
   rm -rf "${LOCK_DIR}"
   rm -f "${PID_FILE}"
-  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+  if ! acquire_lock; then
     echo "[ERROR] Could not acquire lock at ${LOCK_DIR}" >&2
     exit 3
   fi
 fi
+
+# ----- 終了ハンドリング -----
+#
+# lock を取得した後すぐに cleanup trap を仕掛ける。これ以降の exit （claude
+# バイナリ不在 / signal / 正常終了）で lock + pidfile を必ず掃除する。
+cleanup_on_exit() {
+  rm -f "${PID_FILE}"
+  rm -rf "${LOCK_DIR}"
+}
+trap cleanup_on_exit EXIT
+
+RECEIVED_STOP=0
+on_signal() {
+  RECEIVED_STOP=1
+  echo "[mind-loop] received stop signal, exiting after current cycle..." >&2
+}
+trap on_signal TERM INT
 
 # ----- claude バイナリ解決 -----
 
@@ -133,28 +172,6 @@ if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
   echo "[HINT] For tests, AI_ORG_OS_CLAUDE_BIN can point to a stub script" >&2
   exit 4
 fi
-
-# ----- 終了ハンドリング -----
-
-# このループプロセスのために予約する trap。SIGTERM / SIGINT で
-# 進行中の cycle を完走してから loop を抜ける（強制終了ではない）。
-# 強制終了が必要なときは SIGKILL を使う（pid file は残るが arena 上問題ない）。
-RECEIVED_STOP=0
-on_signal() {
-  RECEIVED_STOP=1
-  echo "[mind-loop] received stop signal, exiting after current cycle..." >&2
-}
-trap on_signal TERM INT
-
-cleanup_on_exit() {
-  rm -f "${PID_FILE}"
-  rm -rf "${LOCK_DIR}"
-}
-trap cleanup_on_exit EXIT
-
-# ----- PID file 書き込み -----
-
-echo "$$" > "${PID_FILE}"
 
 # ----- ループ本体 -----
 

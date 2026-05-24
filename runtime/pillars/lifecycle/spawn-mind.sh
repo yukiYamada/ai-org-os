@@ -197,9 +197,32 @@ if [ "${START_LOOP}" = "1" ]; then
   fi
   LOOP_PID=$!
   disown "${LOOP_PID}" 2>/dev/null || true
-  echo "[spawn-mind] Loop started in background (pid ${LOOP_PID})"
+
+  # Codex P1 PR #61: 起動成功を検証する。
+  # mind-loop.sh は lock 取得直後に PID file を書くため、これをシグナルにする。
+  # 最大 1 秒（5 回 × 200ms）待つ。
+  LOOP_PID_FILE="${MIND_DIR}/.mind-loop.pid"
+  verified=0
+  for _ in 1 2 3 4 5; do
+    sleep 0.2
+    if [ -f "${LOOP_PID_FILE}" ]; then
+      verified=1
+      break
+    fi
+  done
+  if [ "${verified}" -ne 1 ]; then
+    echo "[ERROR] mind-loop.sh did not initialize within 1s (pid file ${LOOP_PID_FILE} not found)" >&2
+    echo "[HINT] Mind '${MIND_NAME}' was spawned but its loop is not running." >&2
+    if [ -f "${MIND_DIR}/mind-loop.log" ]; then
+      echo "[HINT] Last 10 lines of mind-loop.log:" >&2
+      tail -10 "${MIND_DIR}/mind-loop.log" >&2 || true
+    fi
+    echo "[HINT] Retry manually: ${SCRIPT_DIR}/mind-loop.sh ${MIND_NAME}" >&2
+    exit 9
+  fi
+  echo "[spawn-mind] Loop started in background (pid ${LOOP_PID}, verified via pid file)"
   echo "  - Log:    ${MIND_DIR}/mind-loop.log"
-  echo "  - PID:    ${MIND_DIR}/.mind-loop.pid (managed by mind-loop.sh)"
+  echo "  - PID:    ${LOOP_PID_FILE} (managed by mind-loop.sh)"
   echo "  - Stop:   ${SCRIPT_DIR}/kill-mind.sh ${MIND_NAME}"
 else
   echo ""
