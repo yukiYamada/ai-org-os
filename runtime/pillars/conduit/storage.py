@@ -10,13 +10,28 @@ core operations: send_dispatch / read_inbox / ack_dispatch.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_STORAGE_DIR = Path(__file__).parent.resolve() / "storage"
+
+def _default_storage_dir() -> Path:
+    """$AI_ORG_OS_HOME/conduit-storage/ (Phase 5b-4 / ADR-0018)。
+
+    関数化することで、env 切り替えだけでテスト隔離可能 (module load 時固定を回避)。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env) / "conduit-storage"
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os" / "conduit-storage"
+
+
+# 旧コードからの参照のため module-level エイリアスは残すが、関数で解決する。
+DEFAULT_STORAGE_DIR = _default_storage_dir()
 
 MIND_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 MSG_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -68,7 +83,7 @@ class Nexus:
         storage_dir: Path | str | None = None,
         identity: str | None = None,
     ) -> None:
-        base = Path(storage_dir) if storage_dir is not None else DEFAULT_STORAGE_DIR
+        base = Path(storage_dir) if storage_dir is not None else _default_storage_dir()
         self.storage_dir = base.resolve()
         self.inbox_dir = self.storage_dir / "inbox"
         self.archive_dir = self.storage_dir / "archive"

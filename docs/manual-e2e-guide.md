@@ -42,13 +42,24 @@
 
 ## 手順
 
-### [0] ホスト setup を 1 回だけ叩く (Phase 5b-3 / #78)
+### [0] ホスト setup を 1 回だけ叩く (Phase 5b-3 / 5b-4)
 
 ```bash
 bash runtime/host/setup.sh
 ```
 
-これで `runtime/host/.venv/` (mcp 入り) と `runtime/host/config.env` (OS ネイティブパス解決済) が出来る。spawn-mind.sh 以降はこの設定を参照する。
+これで `$AI_ORG_OS_HOME` (default `~/.ai-org-os/`) に以下が生成:
+- `venv/` — host Python venv (mcp 入り)
+- `config.env` — OS ネイティブパス解決済
+- `minds/`, `issues/{inbox,archive}/`, `snapshots/`, `conduit-storage/` — 状態置き場
+
+**repo (`~/pgit/ai-org-os/`) には runtime state が一切作られない** (ADR-0018)。
+
+別の場所を使いたいなら:
+```bash
+export AI_ORG_OS_HOME=/custom/path
+bash runtime/host/setup.sh
+```
 
 再セットアップ (mcp の major upgrade 等):
 ```bash

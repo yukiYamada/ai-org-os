@@ -23,6 +23,11 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+# Phase 5b-4 (#81 / ADR-0018): AI_ORG_OS_HOME を tmp に向ければ全 Pillar の path が tmp に
+export AI_ORG_OS_HOME="${TMP_DIR}"
+mkdir -p "${TMP_DIR}/issues/inbox" "${TMP_DIR}/issues/archive" \
+         "${TMP_DIR}/snapshots" "${TMP_DIR}/conduit-storage/inbox" "${TMP_DIR}/conduit-storage/archive" \
+         "${TMP_DIR}/minds"
 TMP_ISSUES="${TMP_DIR}/issues"
 TMP_SNAPSHOTS="${TMP_DIR}/snapshots"
 TMP_STATUS="${TMP_DIR}/conductor-status.json"
@@ -48,9 +53,8 @@ assert() {
   fi
 }
 
-echo "[case] 1. inbox.py submit で Issue を投入"
+echo "[case] 1. inbox.py submit で Issue を投入 (AI_ORG_OS_HOME 経由)"
 issue_id="$(python3 "${RUNTIME_DIR}/pillars/inbox/inbox.py" \
-              --issues-dir "${TMP_ISSUES}" \
               submit "smoke test issue" --body "hello warden" --priority p2 \
               --submitter "e2e-test" 2>&1 | tail -1)"
 echo "  submitted: ${issue_id}"
@@ -60,13 +64,11 @@ else
   assert "issue file in inbox" 0
 fi
 
-echo "[case] 2. Conductor を 2 cycle (period=0, max=2) 走らせる"
-# env で path / cycle 数を差し替え。conductor.py が __main__ で env を読む。
+echo "[case] 2. Conductor を 2 cycle (period=0, max=2) 走らせる (AI_ORG_OS_HOME=${TMP_DIR})"
+# Phase 5b-4: AI_ORG_OS_HOME を tmp に向けたので、conductor が自動で tmp 配下を読む。
+# period / max_cycles だけは env で渡す。
 AI_ORG_OS_CONDUCTOR_PERIOD=0 \
 AI_ORG_OS_CONDUCTOR_MAX_CYCLES=2 \
-AI_ORG_OS_CONDUCTOR_STATUS_PATH="${TMP_STATUS}" \
-AI_ORG_OS_CONDUCTOR_ISSUES_DIR="${TMP_ISSUES}" \
-AI_ORG_OS_CONDUCTOR_SNAPSHOTS_DIR="${TMP_SNAPSHOTS}" \
   python3 "${RUNTIME_DIR}/pillars/conductor/conductor.py" 2>&1 | sed 's/^/  /'
 rc=${PIPESTATUS[0]}
 if [ "${rc}" -eq 0 ]; then

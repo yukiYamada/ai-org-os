@@ -36,8 +36,28 @@ sys.path.insert(0, str(Path(__file__).parent))
 from observe import gather_observations  # noqa: E402
 
 DEFAULT_TTL_DAYS = 7
-# snapshots ディレクトリのデフォルト。テストでは tmp に差し替えて使う。
-DEFAULT_SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+
+def _runtime_home() -> Path:
+    """$AI_ORG_OS_HOME or ~/.ai-org-os/ (Phase 5b-4 / ADR-0018)。
+
+    遅延評価のため毎回 env を読む (テストで monkey-patch 不要、env を
+    set し直せばすぐに反映される)。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env)
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os"
+
+
+def _default_snapshot_dir() -> Path:
+    return _runtime_home() / "snapshots"
+
+
+# 後方互換: 旧コードからの `DEFAULT_SNAPSHOT_DIR` 参照を残すが、関数で解決する。
+# 関数化したので、テストは AI_ORG_OS_HOME を tmp に向ければ全自動で隔離される。
+DEFAULT_SNAPSHOT_DIR = _default_snapshot_dir()
 
 
 def _snapshot_id(now: dt.datetime) -> str:
@@ -99,7 +119,7 @@ def write_snapshot(
           壊れた JSON は最終位置に残らない（tmp 残骸は次回 prune が掃除する）。
     """
     if target_dir is None:
-        target_dir = DEFAULT_SNAPSHOT_DIR
+        target_dir = _default_snapshot_dir()
     if now is None:
         now = dt.datetime.now(dt.timezone.utc)
 
@@ -169,7 +189,7 @@ def prune_snapshots(
           旧 `<` だと粒度の荒い FS で `ttl_days=0` でも残ることがあった）。
     """
     if target_dir is None:
-        target_dir = DEFAULT_SNAPSHOT_DIR
+        target_dir = _default_snapshot_dir()
     if now is None:
         now = dt.datetime.now(dt.timezone.utc)
     if ttl_days < 0:

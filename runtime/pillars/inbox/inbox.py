@@ -40,9 +40,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-# デフォルトの Issue 保管場所。テストでは tmp に差し替える。
-# `runtime/pillars/inbox/` から見て `../../issues/` が runtime/issues/。
-DEFAULT_ISSUES_DIR = (Path(__file__).parent / ".." / ".." / "issues").resolve()
+def _default_issues_dir() -> Path:
+    """$AI_ORG_OS_HOME/issues/ (Phase 5b-4 / ADR-0018)。
+
+    関数化することで、env 切り替えだけでテスト隔離可能。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env) / "issues"
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os" / "issues"
+
+
+# 旧コードからの参照のため module-level エイリアスを残す (関数で解決)。
+DEFAULT_ISSUES_DIR = _default_issues_dir()
 
 # 入力検証。spawn-mind.sh / conduit/storage.py と同じ文字集合に揃える。
 SUBMITTER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -143,7 +154,7 @@ def _validate_issue_id(issue_id: str) -> None:
 
 
 def _resolve_issues_dir(issues_dir: Path | None) -> Path:
-    base = Path(issues_dir) if issues_dir is not None else DEFAULT_ISSUES_DIR
+    base = Path(issues_dir) if issues_dir is not None else _default_issues_dir()
     return base.resolve()
 
 

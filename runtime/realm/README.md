@@ -20,7 +20,7 @@ runtime/realm/
 - Docker Desktop 等で `docker` / `docker compose` が動くこと
 - ai-org-os repo を git で clone 済み
 - **ホストユーザーが `claude code login` 済** — Mind を起動する際に必要 ([ADR-0016](../../docs/adr/0016-mind-auth-and-host-container-boundary.md))
-- **`bash runtime/host/setup.sh` を 1 回叩いて済ませてある** — host venv + mcp install + `runtime/host/config.env` 生成 (Phase 5b-3 / Issue #78 / [host/README.md](../host/README.md))
+- **`bash runtime/host/setup.sh` を 1 回叩いて済ませてある** — `$AI_ORG_OS_HOME` (default `~/.ai-org-os/`) に venv + config.env + ディレクトリ骨格を生成 (Phase 5b-4 / ADR-0018 / [host/README.md](../host/README.md))
 - (任意) `ANTHROPIC_API_KEY` env var — Judgment Pillar 用。未設定でも Realm は起動するが Conductor の判定は fallback 経路になる
 
 ## End-to-End 手動確認ガイド

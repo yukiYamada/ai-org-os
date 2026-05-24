@@ -25,10 +25,17 @@ stub_host_config_init() {
   local stub_config="${tmp_dir}/stub-host-config.env"
   touch "${stub_py}" "${stub_nexus}"
   cat > "${stub_config}" <<CFG
+AI_ORG_OS_HOME=${tmp_dir}
 HOST_PYTHON_BIN=${stub_py}
 HOST_NEXUS_PY=${stub_nexus}
 HOST_RUNTIME_DIR=${RUNTIME_DIR:-/tmp}
 HOST_SETUP_AT=test-stub
 CFG
+  # Phase 5b-4 (#81): tests も AI_ORG_OS_HOME を tmp に向ける
+  # (snapshot / inbox / conduit / conductor が tmp で隔離される)。
+  export AI_ORG_OS_HOME="${tmp_dir}"
   export AI_ORG_OS_HOST_CONFIG="${stub_config}"
+  # ディレクトリ骨格を tmp 内に作る (各 Pillar が mkdir するが、テストで先回り)
+  mkdir -p "${tmp_dir}/minds" "${tmp_dir}/issues/inbox" "${tmp_dir}/issues/archive" \
+           "${tmp_dir}/snapshots" "${tmp_dir}/conduit-storage/inbox" "${tmp_dir}/conduit-storage/archive"
 }

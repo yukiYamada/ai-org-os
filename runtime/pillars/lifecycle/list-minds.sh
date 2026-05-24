@@ -16,10 +16,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Phase 5a-2: list-minds.sh は runtime/pillars/lifecycle/ 配下。runtime/minds/ は
-# RUNTIME_DIR 経由で参照する。
+# Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/ 配下。
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-MINDS_DIR="${RUNTIME_DIR}/minds"
+DEFAULT_RUNTIME_HOME="${HOME:-${USERPROFILE:-}}/.ai-org-os"
+RUNTIME_HOME="${AI_ORG_OS_HOME:-${DEFAULT_RUNTIME_HOME}}"
+MINDS_DIR="${RUNTIME_HOME}/minds"
 
 # .mind-meta.md を持つディレクトリだけを「正規の Mind」として扱う
 mapfile -t mind_dirs < <(find "${MINDS_DIR}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)

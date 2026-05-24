@@ -22,7 +22,7 @@ TEST_TMP_DIR="$(mktemp -d)"
 stub_host_config_init "${TEST_TMP_DIR}"
 
 cleanup() {
-  find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
+  find "${AI_ORG_OS_HOME}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
   rm -rf "${TEST_TMP_DIR}"
 }
 trap cleanup EXIT

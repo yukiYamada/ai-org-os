@@ -44,7 +44,7 @@ export AI_ORG_OS_CLAUDE_BIN="${STUB_DIR}/fake-claude.sh"
 stub_host_config_init "${STUB_DIR}"
 
 cleanup() {
-  find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
+  find "${AI_ORG_OS_HOME}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
   rm -rf "${STUB_DIR}"
 }
 trap cleanup EXIT
@@ -104,7 +104,7 @@ assert_exit_code "invalid period" 1 "${code}"
 echo "[case] 3. --max-cycles=2 で 2 cycle 後に自然停止する"
 mind="${TEST_ID}-max"
 "${SPAWN}" generic designer "${mind}" >/dev/null 2>&1
-mind_dir="${RUNTIME_DIR}/minds/${mind}"
+mind_dir="${AI_ORG_OS_HOME}/minds/${mind}"
 pid_file="${mind_dir}/.mind-loop.pid"
 log_file="${mind_dir}/mind-loop.log"
 
@@ -131,7 +131,7 @@ assert_true "stub claude was invoked" "${stub_ok}"
 echo "[case] 4. kill-mind.sh が外側ループを停止する"
 mind="${TEST_ID}-sig"
 "${SPAWN}" generic designer "${mind}" >/dev/null 2>&1
-mind_dir="${RUNTIME_DIR}/minds/${mind}"
+mind_dir="${AI_ORG_OS_HOME}/minds/${mind}"
 pid_file="${mind_dir}/.mind-loop.pid"
 
 # 長めのループを背景で起動（period=1 で max 無限）。テストが暴走しないよう
@@ -178,7 +178,7 @@ assert_true "Mindspace removed after kill-mind.sh" "${md_ok}"
 echo "[case] 5. 同じ Mind に loop を二重起動すると exit 3"
 mind="${TEST_ID}-dup"
 "${SPAWN}" generic designer "${mind}" >/dev/null 2>&1
-mind_dir="${RUNTIME_DIR}/minds/${mind}"
+mind_dir="${AI_ORG_OS_HOME}/minds/${mind}"
 
 # 1 回目: バックグラウンド起動
 "${LOOP}" "${mind}" --period 1 --max-cycles 10 >/dev/null 2>&1 &

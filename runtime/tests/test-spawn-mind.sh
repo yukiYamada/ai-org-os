@@ -28,7 +28,7 @@ STUB_NEXUS="${TEST_TMP_DIR}/stub-nexus.py"
 
 cleanup() {
   # このテスト ID で始まる Mindspace をすべて削除
-  find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
+  find "${AI_ORG_OS_HOME}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
   rm -rf "${TEST_TMP_DIR}"
 }
 trap cleanup EXIT
@@ -120,7 +120,7 @@ set +e
 code=$?
 set -e
 assert_exit_code "happy path" 0 "${code}"
-mind_dir="${RUNTIME_DIR}/minds/${mind}"
+mind_dir="${AI_ORG_OS_HOME}/minds/${mind}"
 assert_file_exists "Mindspace CLAUDE.md" "${mind_dir}/CLAUDE.md"
 assert_file_exists "Mindspace .mind-meta.md" "${mind_dir}/.mind-meta.md"
 assert_file_exists "Mindspace .mcp.json (Nexus 接続)" "${mind_dir}/.mcp.json"
@@ -200,7 +200,7 @@ set -e
 assert_exit_code "persona with double quote" 6 "${code}"
 
 # パターン 9: 早期失敗の確認（Mindspace が作られていない）
-if [ -d "${RUNTIME_DIR}/minds/${TEST_ID}-vkind" ] || [ -d "${RUNTIME_DIR}/minds/${TEST_ID}-vpersona" ]; then
+if [ -d "${AI_ORG_OS_HOME}/minds/${TEST_ID}-vkind" ] || [ -d "${AI_ORG_OS_HOME}/minds/${TEST_ID}-vpersona" ]; then
   FAIL=$((FAIL + 1))
   FAIL_MSGS+=("invalid args: Mindspace should not be created")
   echo "  [NG]   invalid args: Mindspace was created despite failure"
@@ -219,7 +219,7 @@ AI_ORG_OS_HOST_CONFIG="/nonexistent/config.env" \
 code=$?
 set -e
 assert_exit_code "missing config.env" 5 "${code}"
-if [ -d "${RUNTIME_DIR}/minds/${mind_no_cfg}" ]; then
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_no_cfg}" ]; then
   FAIL=$((FAIL + 1))
   FAIL_MSGS+=("missing config.env: Mindspace should not be created on failure")
   echo "  [NG]   missing config.env: Mindspace leaked"
@@ -282,7 +282,7 @@ set -e
 assert_exit_code "missing claude with --start-loop" 8 "${code}"
 # 副作用が起きていないこと: --start-loop なしでは検証されないので、Mindspace 生成前に
 # claude チェックが走ることが重要（python 検証と対称）。Mindspace は作られていないはず。
-if [ -d "${RUNTIME_DIR}/minds/${mind_no_claude}" ]; then
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_no_claude}" ]; then
   FAIL=$((FAIL + 1))
   FAIL_MSGS+=("missing claude --start-loop: Mindspace should not be created")
   echo "  [NG]   missing claude --start-loop: Mindspace was created despite failure"
