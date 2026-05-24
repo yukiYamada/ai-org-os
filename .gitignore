@@ -62,6 +62,10 @@ runtime/issues/inbox/*
 runtime/issues/archive/*
 !runtime/issues/archive/.gitkeep
 
+# ai-org-os: Conductor cycle status (Phase 5b-1). Runtime artifact, not committed.
+runtime/realm/conductor-status.json
+runtime/realm/conductor-status.json.tmp
+
 # Python
 *.pyc
 __pycache__/
