@@ -35,6 +35,7 @@ jobs:
           chmod +x runtime/pillars/lifecycle/list-minds.sh
           chmod +x runtime/pillars/lifecycle/mind-loop.sh
           chmod +x runtime/pillars/conduit/start.sh
+          chmod +x runtime/pillars/registry/registry.py
           chmod +x runtime/tests/run-tests.sh
           chmod +x runtime/tests/test-*.sh
 
