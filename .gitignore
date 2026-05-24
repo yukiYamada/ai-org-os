@@ -56,6 +56,12 @@ runtime/pillars/conduit/storage/archive/*
 runtime/pillars/observation/snapshots/*
 !runtime/pillars/observation/snapshots/.gitkeep
 
+# ai-org-os: Inbox Pillar issues (Phase 5a-5, ADR-0012/0014). Host-local, not committed.
+runtime/issues/inbox/*
+!runtime/issues/inbox/.gitkeep
+runtime/issues/archive/*
+!runtime/issues/archive/.gitkeep
+
 # Python
 *.pyc
 __pycache__/
