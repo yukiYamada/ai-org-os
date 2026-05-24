@@ -19,6 +19,18 @@ runtime/realm/
 
 - Docker Desktop 等で `docker` / `docker compose` が動くこと
 - ai-org-os repo を git で clone 済み
+- **ホストユーザーが `claude code login` 済** — Mind を起動する際に必要 ([ADR-0016](../../docs/adr/0016-mind-auth-and-host-container-boundary.md))
+- (任意) `ANTHROPIC_API_KEY` env var — Judgment Pillar 用。未設定でも Realm は起動するが Conductor の判定は fallback 経路になる
+
+## 認証経路の整理
+
+| 主体 | 認証 | 起動場所 |
+|---|---|---|
+| Pillar 群 (Conductor / Observation / Inbox / Lifecycle / Conduit / Registry) | 認証なし (Realm 内動作) | Container 内 |
+| Judgment Pillar | `ANTHROPIC_API_KEY` 環境変数 (SDK 直叩き) | Container 内 |
+| Mind | ホストユーザーの Claude Code login session | **ホスト上** |
+
+詳細: [ADR-0016](../../docs/adr/0016-mind-auth-and-host-container-boundary.md)
 
 ## 起動
 
