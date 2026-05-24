@@ -1,0 +1,6 @@
+# Judgment Pillar dependencies (Phase 5a-3, Issue #38).
+# Anthropic SDK だけ。判断 Claude は SDK 直叩き（対話不要、決定論的）— ADR-0010 §5.
+#
+# セキュリティ方針 (ADR-0009 / ADR-0005): 依存最小、npm/pypi サプライチェーン
+# 攻撃面積を最小化する。anthropic は公式 SDK で広く使われており信頼性が高い。
+anthropic>=0.40.0
