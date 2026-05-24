@@ -39,6 +39,10 @@ STUB
 chmod +x "${STUB_DIR}/fake-claude.sh"
 export AI_ORG_OS_CLAUDE_BIN="${STUB_DIR}/fake-claude.sh"
 
+# Phase 5b-3 (#78): spawn-mind 経由のため stub host config を準備
+. "${SCRIPT_DIR}/_lib_host_stub.sh"
+stub_host_config_init "${STUB_DIR}"
+
 cleanup() {
   find "${RUNTIME_DIR}/minds" -maxdepth 1 -type d -name "${TEST_ID}-*" -exec rm -rf {} + 2>/dev/null || true
   rm -rf "${STUB_DIR}"

@@ -74,3 +74,8 @@ runtime/pillars/conduit/.venv/
 
 # Claude Code agent worktrees (subagent isolation mode) — local-only working dirs
 .claude/
+
+# ai-org-os: host setup artifacts (Phase 5b-3, ADR-0016). Host-specific, not committed.
+runtime/host/.venv/
+runtime/host/config.env
+runtime/host/config.env.tmp.*

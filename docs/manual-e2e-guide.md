@@ -34,14 +34,26 @@
 | Docker Desktop が動く | `docker --version` |
 | ホストに Python 3.10+ | `python3 --version` |
 | **ホストで claude code login 済** | `claude` 起動時に再 login を要求されない |
-| ホストに `mcp` パッケージ | `python3 -c "import mcp"` が通る。無ければ `pip install mcp` または `runtime/pillars/conduit/start.sh --setup-only` で venv を作る |
 | (任意) ANTHROPIC_API_KEY | 未設定でも OK。設定すれば Conductor の Judgment が実 Claude (haiku) で動く |
 
 依存の理由 (ADR-0016 と整合):
-- mcp は **ホスト** に居る Mind が nexus.py を起動するために必要
-- anthropic SDK は **Container** に居る Judgment Pillar 専用 (Dockerfile で install 済)
+- mcp は **ホスト** に居る Mind が nexus.py を起動するために必要 → `runtime/host/setup.sh` で venv に install される
+- anthropic SDK は **Container** に居る Judgment Pillar 専用 → Dockerfile で install 済
 
 ## 手順
+
+### [0] ホスト setup を 1 回だけ叩く (Phase 5b-3 / #78)
+
+```bash
+bash runtime/host/setup.sh
+```
+
+これで `runtime/host/.venv/` (mcp 入り) と `runtime/host/config.env` (OS ネイティブパス解決済) が出来る。spawn-mind.sh 以降はこの設定を参照する。
+
+再セットアップ (mcp の major upgrade 等):
+```bash
+bash runtime/host/setup.sh --recreate-venv
+```
 
 ### [1] Realm を起動する
 
