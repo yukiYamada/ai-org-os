@@ -37,6 +37,7 @@ jobs:
           chmod +x runtime/pillars/conduit/start.sh
           chmod +x runtime/pillars/inbox/inbox.py
           chmod +x runtime/pillars/inbox/submit-issue.sh
+          chmod +x runtime/pillars/judgment/judgment.py
           chmod +x runtime/tests/run-tests.sh
           chmod +x runtime/tests/test-*.sh
 

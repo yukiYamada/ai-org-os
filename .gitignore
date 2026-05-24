@@ -67,3 +67,6 @@ runtime/issues/archive/*
 __pycache__/
 *.egg-info/
 runtime/pillars/conduit/.venv/
+
+# Claude Code agent worktrees (subagent isolation mode) — local-only working dirs
+.claude/
