@@ -189,11 +189,82 @@ def _parse_int_option(argv: list[str], name: str, default: int) -> int:
         raise SystemExit(2)
 
 
+def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> str:
+    """Realm 統合ビュー (Phase 5b-1 / #71)。
+
+    既存 snapshot 表 + Inbox queue + Conductor cycle status + 最新 Judgment を
+    1 画面に並べる。各セクションは独立に失敗しても残りを描画する。
+
+    Mind 0 件でも "=== Realm Observatory ===" ヘッダは出す
+    (E2E テスト / 統合ビュー識別性のため。Codex P2 CI fix)。
+    """
+    sections: list[str] = []
+    if not observations:
+        sections.append("=== Realm Observatory ===")
+        sections.append("  No minds spawned.")
+    else:
+        sections.append(_format_table(observations))
+
+    # --- Inbox queue
+    try:
+        sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "inbox"))
+        from inbox import list_pending_issues  # type: ignore[import-not-found]
+
+        pending = list_pending_issues()
+        sections.append("")
+        sections.append(f"=== Inbox Queue ({len(pending)} pending) ===")
+        if not pending:
+            sections.append("  (no pending issues)")
+        else:
+            for rec in pending[:5]:
+                sections.append(
+                    f"  {rec.issue_id}  {rec.priority:<3}  {rec.submitter:<12}  {rec.title}"
+                )
+            if len(pending) > 5:
+                sections.append(f"  ... and {len(pending) - 5} more")
+    except Exception as exc:  # noqa: BLE001
+        sections.append("")
+        sections.append(f"=== Inbox Queue (unavailable: {exc}) ===")
+
+    # --- Conductor status
+    status_path = RUNTIME_DIR / "realm" / "conductor-status.json"
+    sections.append("")
+    if not status_path.is_file():
+        sections.append("=== Conductor (not running yet) ===")
+        sections.append("  Start: docker compose up -d --build (under runtime/realm/)")
+    else:
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            last = status.get("last_cycle", {})
+            total = status.get("total_cycles", "?")
+            sections.append(f"=== Conductor (total cycles: {total}) ===")
+            sections.append(f"  last cycle:    #{last.get('cycle', '?')}")
+            sections.append(f"  started_at:    {last.get('started_at', '?')}")
+            sections.append(f"  ended_at:      {last.get('ended_at', '?')}")
+            # pending_issues == -1 は Conductor 側で「取得失敗」マーカー (混乱回避のため "?" 表示)
+            pending = last.get("pending_issues")
+            pending_display = "?" if pending == -1 or pending is None else pending
+            sections.append(f"  pending:       {pending_display}")
+            sections.append(f"  judgment:      {last.get('judgment_status', '?')}")
+            err = last.get("judgment_error")
+            if err:
+                sections.append(f"  judgment_err:  {err[:120]}")
+            breakdown = last.get("judgments_action_breakdown", {})
+            if breakdown:
+                actions = "  ".join(f"{k}={v}" for k, v in sorted(breakdown.items()))
+                sections.append(f"  last_actions:  {actions}")
+        except Exception as exc:  # noqa: BLE001
+            sections.append(f"=== Conductor (status JSON unreadable: {exc}) ===")
+
+    return "\n".join(sections)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     as_json = "--json" in argv
     as_snapshot = "--snapshot" in argv
     as_prune = "--prune" in argv
+    as_realm = "--realm" in argv
 
     now_epoch = time.time()
 
@@ -224,7 +295,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     observations = gather_observations(now_epoch)
-    if as_json:
+    if as_realm:
+        # Phase 5b-1 統合ビュー: snapshot + Inbox + Conductor cycle status を 1 画面に
+        print(_format_realm_view(observations))
+    elif as_json:
         print(_format_json(observations))
     else:
         print(_format_table(observations))
