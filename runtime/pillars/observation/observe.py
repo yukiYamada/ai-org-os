@@ -210,13 +210,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if as_snapshot:
-        from snapshot import write_snapshot
+        from snapshot import load_snapshot, write_snapshot
 
+        # Codex P2 PR #62: 旧実装は write_snapshot 後に gather_observations を再度呼んで
+        # stdout に出していたが、その間に Mind の状態が変わると saved file と stdout が
+        # divergent になりうる（特に 5 分 / 1 時間の status しきい値跨ぎで）。
+        # 修正: 書き込んだファイルを読み戻して同じ payload を stdout に流す。
         path = write_snapshot()
         print(f"[snapshot] wrote {path}", file=sys.stderr)
-        # 利用者が pipe で次の処理に流せるよう、stdout には JSON も出す。
-        observations = gather_observations(now_epoch)
-        print(_format_json(observations))
+        # 利用者が pipe で次の処理に流せるよう、stdout には保存した JSON を出す。
+        payload = load_snapshot(path)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
 
     observations = gather_observations(now_epoch)

@@ -175,6 +175,26 @@ class TestPruneSnapshots(unittest.TestCase):
         deleted = prune_snapshots(target_dir=self.target, ttl_days=0, now=now)
         self.assertEqual(len(deleted), 2)
 
+    def test_ttl_zero_deletes_mtime_equal_to_now(self) -> None:
+        """Codex P2 PR #62: mtime == cutoff のファイルも削除される (`<=` 境界)。
+
+        旧実装の `<` だと、mtime が now と等しいファイル (粒度が荒い FS でよく起きる) が
+        ttl_days=0 でも残ってしまう。README/CLI は ttl_days=0 を「全削除」と謳う。
+        """
+        now = FIXED_NOW
+        self._write_at_mtime("equal.json", now.timestamp())
+        deleted = prune_snapshots(target_dir=self.target, ttl_days=0, now=now)
+        self.assertEqual({p.name for p in deleted}, {"equal.json"})
+
+    def test_ttl_boundary_inclusive_for_ttl_days(self) -> None:
+        """ちょうど ttl_days 秒前のファイルも削除される（`<=` 境界）。"""
+        now = FIXED_NOW
+        # ちょうど 7 日前 = 7 * 86400 秒前
+        boundary = self._write_at_mtime("boundary.json", now.timestamp() - 7 * 86400)
+        deleted = prune_snapshots(target_dir=self.target, ttl_days=7, now=now)
+        self.assertEqual({p.name for p in deleted}, {"boundary.json"})
+        self.assertFalse(boundary.exists())
+
     def test_cleans_old_tmp_residue(self) -> None:
         """self-review fix: prune は 5 秒以上経過した *.tmp* 残骸を掃除する。
 

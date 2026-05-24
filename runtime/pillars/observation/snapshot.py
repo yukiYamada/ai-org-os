@@ -163,8 +163,10 @@ def prune_snapshots(
     注意:
         - mtime 基準で判定する。手動コピー等で mtime が新しくなっている
           ファイルは保持される（意図された挙動）。
-        - .json 以外のファイル / サブディレクトリは触らない。
+        - .json 以外のファイル / サブディレクトリは触らない（*.tmp* 残骸は別扱い）。
         - 削除中の OSError は無視（ファイル系の競合は無視して続行）。
+        - 境界条件: mtime <= cutoff を「古い」と判定する（Codex P2 PR #62 指摘。
+          旧 `<` だと粒度の荒い FS で `ttl_days=0` でも残ることがあった）。
     """
     if target_dir is None:
         target_dir = DEFAULT_SNAPSHOT_DIR
@@ -190,12 +192,13 @@ def prune_snapshots(
             continue
         try:
             if is_tmp_residue:
-                # tmp 残骸は無条件削除（5 秒前以前のもののみに限定して、進行中の write を
-                # 巻き込まない）。5 秒は十分すぎる安全マージン。
-                if entry.stat().st_mtime < now.timestamp() - 5:
+                # tmp 残骸は 5 秒以上経過したもののみ削除（進行中の write を巻き込まない）。
+                if entry.stat().st_mtime <= now.timestamp() - 5:
                     entry.unlink()
                     deleted.append(entry)
-            elif entry.stat().st_mtime < cutoff:
+            elif entry.stat().st_mtime <= cutoff:
+                # Codex P2 PR #62: `<` だと mtime == cutoff のファイルが残った。
+                # `ttl_days=0` を「全削除」と扱う README/CLI 契約に合わせて `<=` に変更。
                 entry.unlink()
                 deleted.append(entry)
         except OSError:
