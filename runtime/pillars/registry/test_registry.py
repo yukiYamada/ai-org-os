@@ -2,7 +2,7 @@
 Unit tests for the Registry Pillar.
 
 Standard library only (unittest + tempfile). Each test fabricates a temporary
-`kinds_dir` to keep the suite independent from the real runtime/kinds/.
+`kinds_dir` to keep the suite independent from the real templates/kinds/.
 """
 
 from __future__ import annotations
@@ -212,13 +212,15 @@ class TestIsRegistered(unittest.TestCase):
 
 
 class TestRealRuntimeKinds(unittest.TestCase):
-    """Sanity check against the actual runtime/kinds/ directory.
+    """Sanity check against the actual templates/kinds/ directory
+    (Phase 5c-1 / ADR-0020: 旧 runtime/kinds/ から移行)。
 
     spawn-mind.sh と Registry の判定ロジックが食い違わないことの確認も兼ねる。
     """
 
     def test_default_kinds_dir_has_generic(self) -> None:
-        # CI でも開発環境でも runtime/kinds/generic.md は必ず存在する想定。
+        # CI でも開発環境でも templates/kinds/generic.md は必ず存在する想定
+        # (ADR-0020 §3 の fallback 層に同梱)。
         kinds = list_kinds()
         names = [k.name for k in kinds]
         self.assertIn("generic", names, f"expected 'generic' in {names}")
@@ -234,6 +236,51 @@ class TestRealRuntimeKinds(unittest.TestCase):
         # Registry: is_registered() が同じ判定を返すこと。
         self.assertTrue(is_registered("generic"))
         self.assertFalse(is_registered("definitely-not-a-real-kind"))
+
+
+class TestKindOverlay(unittest.TestCase):
+    """Phase 5c-1 / ADR-0020: home → templates の overlay。
+
+    `kinds_dir` を渡さず env (AI_ORG_OS_HOME) で home 側を指定すると、
+    home の同名 Kind が templates をマスクすることを確認。
+    """
+
+    def setUp(self) -> None:
+        self._old_home = os.environ.pop("AI_ORG_OS_HOME", None)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+
+    def tearDown(self) -> None:
+        os.environ.pop("AI_ORG_OS_HOME", None)
+        if self._old_home is not None:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    def test_home_empty_falls_back_to_templates(self) -> None:
+        info = get_kind("generic")
+        self.assertIsNotNone(info)
+        assert info is not None
+        # templates 側のはず
+        self.assertIn("templates", str(info.path).replace("\\", "/"))
+
+    def test_home_overlay_shadows_templates(self) -> None:
+        home_kinds = self.home / "kinds"
+        home_kinds.mkdir(parents=True)
+        _write_kind(home_kinds, "generic", version="9.9", status="home-override")
+        info = get_kind("generic")
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual(info.version, "9.9")
+        self.assertEqual(info.status, "home-override")
+
+    def test_home_only_kind_visible_in_list(self) -> None:
+        home_kinds = self.home / "kinds"
+        home_kinds.mkdir(parents=True)
+        _write_kind(home_kinds, "specialist")
+        names = [k.name for k in list_kinds()]
+        self.assertIn("specialist", names)
+        self.assertIn("generic", names, "templates の generic も同時に見える")
 
 
 class TestOSErrorHandling(unittest.TestCase):

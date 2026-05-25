@@ -39,11 +39,18 @@ from storage import AuthorizationError, Nexus
 # Mind 向け MCP tool として inbox.py の関数を wrap する。
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_RUNTIME_DIR / "pillars" / "inbox"))
+sys.path.insert(0, str(_RUNTIME_DIR / "pillars" / "registry"))
 from inbox import (  # noqa: E402
     IssueNotFoundError,
     IssueValidationError,
     claim_issue as _inbox_claim_issue,
     list_pending_issues as _inbox_list_pending,
+    peek_pending_issue as _inbox_peek,
+)
+# Phase 5c-1 (#87 / ADR-0019): Guild mismatch 検出のため guild.py を import。
+from guild import (  # noqa: E402
+    DEFAULT_GUILD,
+    get_mind_guild as _get_mind_guild,
 )
 
 # Identity binding (Issue #19, ADR-0008):
@@ -127,9 +134,11 @@ async def list_tools() -> list[Tool]:
             name="claim_issue",
             description=(
                 "Claim a pending Issue from the Realm Inbox. The Issue is moved from "
-                "runtime/issues/inbox/ to runtime/issues/archive/ with claimed_by=<your "
-                "Mind name> and claimed_at recorded in its frontmatter. Atomic — a "
-                "concurrent claim by another Mind will fail with not-found."
+                "the Inbox to the Archive with claimed_by=<your Mind name> and "
+                "claimed_at recorded in its frontmatter. Atomic — a concurrent claim "
+                "by another Mind will fail with not-found. "
+                "Guild axiom (ADR-0019): your Mind's guild must match the Issue's "
+                "guild, otherwise this returns code='forbidden'."
             ),
             inputSchema={
                 "type": "object",
@@ -161,6 +170,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
         elif name == "read_pending_issues":
             # Phase 5b-2: 人間 Inbox の Issue 一覧。identity binding は不要
             # (read-only、公開キュー、ADR-0017 §3「Mind が自分で取りに行く」)。
+            # Phase 5c-1 (ADR-0019): guild も含めて返す。
+            # Mind 側 (Persona) は自身の guild と一致するもののみ claim する想定。
             records = _inbox_list_pending()
             result = {
                 "ok": True,
@@ -172,6 +183,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                         "submitter": r.submitter,
                         "priority": r.priority,
                         "submitted_at": r.submitted_at,
+                        "guild": r.guild,
                         "body": r.body,
                     }
                     for r in records
@@ -180,20 +192,47 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
         elif name == "claim_issue":
             # Phase 5b-2: mind_name は identity binding でチェック済。
             # claimed_by として archive に書き込まれる (ADR-0017 §1 traceability)。
+            # Phase 5c-1 (#87 / ADR-0019): Guild mismatch を機械 reject する。
             mind_name = args["mind_name"]
+            issue_id = args["issue_id"]
             _nexus.assert_identity(mind_name)  # ADR-0008 enforcement
-            rec = _inbox_claim_issue(args["issue_id"], claimer=mind_name)
-            result = {
-                "ok": True,
-                "issue_id": rec.issue_id,
-                "title": rec.title,
-                "submitter": rec.submitter,
-                "priority": rec.priority,
-                "submitted_at": rec.submitted_at,
-                "claimed_by": mind_name,
-                "body": rec.body,
-                "archived_path": str(rec.path),
-            }
+
+            # peek → guild compare → atomic claim、の順。peek と claim の間に
+            # 他 Mind が claim する race は残るが、その場合 _inbox_claim_issue
+            # が IssueNotFoundError を上げて自然に伝播する (forbidden より
+            # 後段で潰れる ≈ FIFO で並んでいた他 Mind の claim が勝つ)。
+            issue_rec = _inbox_peek(issue_id)
+            issue_guild = issue_rec.guild or DEFAULT_GUILD
+            mind_guild = _get_mind_guild(mind_name) or DEFAULT_GUILD
+            if mind_guild != issue_guild:
+                # ADR-0019 §3 axiom: claim-only-own-guild。
+                # storage.AuthorizationError と同じ "forbidden" コードに揃え、
+                # Mind 側 (Persona) が同じ handler で扱えるようにする。
+                result = {
+                    "ok": False,
+                    "code": "forbidden",
+                    "error": (
+                        f"forbidden: mind '{mind_name}' belongs to guild "
+                        f"'{mind_guild}', but issue '{issue_id}' belongs to "
+                        f"guild '{issue_guild}' (axiom: claim-only-own-guild)"
+                    ),
+                    "mind_guild": mind_guild,
+                    "issue_guild": issue_guild,
+                }
+            else:
+                rec = _inbox_claim_issue(issue_id, claimer=mind_name)
+                result = {
+                    "ok": True,
+                    "issue_id": rec.issue_id,
+                    "title": rec.title,
+                    "submitter": rec.submitter,
+                    "priority": rec.priority,
+                    "submitted_at": rec.submitted_at,
+                    "guild": rec.guild,
+                    "claimed_by": mind_name,
+                    "body": rec.body,
+                    "archived_path": str(rec.path),
+                }
         else:
             result = {"ok": False, "error": f"unknown tool: {name}"}
     except KeyError as exc:

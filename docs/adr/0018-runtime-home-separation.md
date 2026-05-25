@@ -109,6 +109,14 @@ Container 内の Conductor 等の Pillar は **`$AI_ORG_OS_HOME` (= /realm/home)
 
 `runtime/kinds/`, `runtime/personas/` は **コード扱い** (git tracked) のまま (ユーザーが Persona を編集するとき git に commit する想定、ADR-0011 と整合)。
 
+> **2026-05-25 更新 (Phase 5c-1 / ADR-0020)**: 本段落を **撤回**。
+> 「Mind の Kind / Persona / Guild は ai-org-os の構成要素ではなく、ai-org-os
+> が動かす組織依存物 (注入されるコンテンツ)」と再整理した。物理配置:
+>   - 同梱テンプレ: `templates/{kinds,personas,guilds}/` (git tracked)
+>   - 利用者の実体: `$AI_ORG_OS_HOME/{kinds,personas,guilds}/` (mutable、別 repo として持てる)
+>   - lookup は home overlay → templates fallback (lazy)
+> 詳細は [ADR-0020](0020-templates-and-org-manifest-separation.md) を参照。
+
 ### 6. 既存 `.gitignore` の整理
 
 これまで `.gitignore` で除外していた以下のパターンは **不要** になる (そもそも repo に居ない):

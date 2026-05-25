@@ -2,8 +2,12 @@
 """
 Registry Pillar v0.1: Mind Kind Registry。
 
-Warden 起動時に `runtime/kinds/*.md` をスキャンして Kind カタログを構築し、
-Kind 一覧 / 詳細 / 登録チェックを提供する最小実装。
+Warden 起動時に Kind カタログを構築し、Kind 一覧 / 詳細 / 登録チェックを
+提供する最小実装。
+
+Phase 5c-1 (ADR-0020): Kind の lookup は 2 source overlay:
+  1. `$AI_ORG_OS_HOME/kinds/*.md` (利用者の実体、優先)
+  2. `templates/kinds/*.md` (ai-org-os 同梱テンプレ、fallback)
 
 責務:
 - list_kinds(kinds_dir=None) -> list[KindInfo]: 登録済み Kind の列挙
@@ -15,6 +19,8 @@ Kind 一覧 / 詳細 / 登録チェックを提供する最小実装。
 - ADR-0010: Warden は機能の集合体、観測は自由
 - ADR-0011: Pillar は ai-org-os コア、編集不可領域、runtime/pillars/ 配下
 - ADR-0015: 既存 Kind の選択は OK、新規 Kind の動的生成は NG
+- ADR-0020: 世界の構成 (runtime/) と組織依存物 (templates/ + AI_ORG_OS_HOME)
+  の物理分離。Kind は依存物カテゴリなので、本 Pillar は両 source を統合する。
 
 依存:
 - 標準ライブラリのみ（observation Pillar と同じ依存ゼロ方針）
@@ -22,7 +28,7 @@ Kind 一覧 / 詳細 / 登録チェックを提供する最小実装。
   `key: value` だけを使うので、yaml ライブラリは不要。
 
 Axiom 整合:
-- Mindspace の中身に触れない（runtime/kinds/ のみを読む）
+- Mindspace の中身に触れない（kinds source のみを読む）
 - Kind は Pillar 領域のメタデータ、Mind の Body スペック定義
 
 Usage:
@@ -35,14 +41,59 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# Locate runtime root from this file's path: runtime/pillars/registry/registry.py
+# Locate runtime root and repo root from this file's path:
+#   runtime/pillars/registry/registry.py
 RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_KINDS_DIR = RUNTIME_DIR / "kinds"
+REPO_DIR = RUNTIME_DIR.parent
+TEMPLATES_DIR = REPO_DIR / "templates"
+
+
+def _home_kinds_dir() -> Path | None:
+    """利用者の Kind 実体 dir (`$AI_ORG_OS_HOME/kinds`)。未設定なら None。
+
+    Phase 5c-1 / ADR-0020: 「同梱テンプレ vs 実体」の overlay の上層。
+    """
+    home = os.environ.get("AI_ORG_OS_HOME")
+    if home:
+        return Path(home) / "kinds"
+    # HOME / USERPROFILE 経由のデフォルトは ADR-0018 と同じ流儀。
+    # ただし「default fallback としての ~/.ai-org-os/kinds」も読みたいので付ける。
+    h = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if h:
+        return Path(h) / ".ai-org-os" / "kinds"
+    return None
+
+
+def _template_kinds_dir() -> Path:
+    """同梱テンプレ Kind dir (`templates/kinds`)。ADR-0020 §3 の fallback 層。"""
+    return TEMPLATES_DIR / "kinds"
+
+
+def _search_dirs(kinds_dir: Path | None) -> list[Path]:
+    """lookup する dir を「優先度が高い順」で返す。
+
+    - kinds_dir が明示されていれば「テスト用 override」としてそれだけを返す
+      (overlay を無視、既存テスト互換)。
+    - そうでなければ home (実体) を先頭、templates (同梱) を末尾に。
+    """
+    if kinds_dir is not None:
+        return [Path(kinds_dir)]
+    dirs: list[Path] = []
+    home = _home_kinds_dir()
+    if home is not None and home.is_dir():
+        dirs.append(home)
+    dirs.append(_template_kinds_dir())
+    return dirs
+
+
+# Phase 5c-1 / ADR-0020: 後方互換シンボル。新規コードは _search_dirs を使う。
+DEFAULT_KINDS_DIR = TEMPLATES_DIR / "kinds"
 
 # spawn-mind.sh の _VALID_NAME_RE と整合させる。
 # Kind name に許される文字: A-Za-z0-9._- のみ、1〜64 文字。
@@ -160,40 +211,45 @@ def _read_kind_file(path: Path) -> KindInfo | None:
 
 
 def list_kinds(kinds_dir: Path | None = None) -> list[KindInfo]:
-    """`runtime/kinds/*.md` を走査して Kind 一覧を返す。
+    """Kind 一覧を返す (Phase 5c-1 / ADR-0020 で overlay 化)。
 
+    - source: `$AI_ORG_OS_HOME/kinds/*.md` (実体) を最優先、無ければ
+      `templates/kinds/*.md` (テンプレ) にフォールバック
+    - 同名 Kind が両方にある場合、home 側を採用、templates 側は隠れる
     - .md 拡張子のみ対象
     - frontmatter から name / version / status を読む
     - frontmatter が無い / 不正なものは無視（warning ログのみ）
     - 結果は name の辞書順でソート（呼び出し側で安定した順序を期待できる）
 
-    冪等性: 同じディレクトリを渡せば、ファイル状態が変わらない限り同じ結果を返す。
+    `kinds_dir` を明示した場合は overlay を無視し、その dir 単体で動く
+    (テスト用; 既存 API 互換)。
+
+    冪等性: source の状態が変わらない限り同じ結果を返す。
     """
-    target = kinds_dir if kinds_dir is not None else DEFAULT_KINDS_DIR
-    if not target.is_dir():
-        return []
-
-    results: list[KindInfo] = []
-    # iterdir + sort で OS 依存の順序を排除（冪等性のため）。
-    try:
-        entries = sorted(target.iterdir(), key=lambda p: p.name)
-    except OSError as exc:
-        raise RegistryError(f"failed to list {target}: {exc}") from exc
-
-    for entry in entries:
-        if not entry.is_file():
+    results_by_name: dict[str, KindInfo] = {}
+    for source in _search_dirs(kinds_dir):
+        if not source.is_dir():
             continue
-        if entry.suffix != ".md":
-            continue
-        info = _read_kind_file(entry)
-        if info is not None:
-            results.append(info)
-
-    return results
+        try:
+            entries = sorted(source.iterdir(), key=lambda p: p.name)
+        except OSError as exc:
+            raise RegistryError(f"failed to list {source}: {exc}") from exc
+        for entry in entries:
+            if not entry.is_file() or entry.suffix != ".md":
+                continue
+            info = _read_kind_file(entry)
+            if info is None:
+                continue
+            # _search_dirs の先頭 (home) が優先。同名は最初に登録された方を残す。
+            results_by_name.setdefault(info.name, info)
+    return sorted(results_by_name.values(), key=lambda k: k.name)
 
 
 def get_kind(name: str, kinds_dir: Path | None = None) -> KindInfo | None:
     """指定 Kind の情報を返す。無ければ None。
+
+    Phase 5c-1 / ADR-0020: home (実体) → templates (同梱) の順で探し、
+    最初に見つかった方を返す。
 
     name のバリデーション (_VALID_NAME_RE) で path traversal 攻撃を防ぐ。
     """
@@ -201,19 +257,15 @@ def get_kind(name: str, kinds_dir: Path | None = None) -> KindInfo | None:
         # 不正な名前は「無い」と等価に扱う（攻撃の足がかりにしない）
         return None
 
-    target = kinds_dir if kinds_dir is not None else DEFAULT_KINDS_DIR
-    candidate = target / f"{name}.md"
-    if not candidate.is_file():
-        return None
-    return _read_kind_file(candidate)
+    for source in _search_dirs(kinds_dir):
+        candidate = source / f"{name}.md"
+        if candidate.is_file():
+            return _read_kind_file(candidate)
+    return None
 
 
 def is_registered(name: str, kinds_dir: Path | None = None) -> bool:
-    """Kind が登録されているか。
-
-    spawn-mind.sh と整合: 登録済み = `runtime/kinds/<name>.md` が存在し、
-    かつ Registry が KindInfo として正しく読み取れる状態。
-    """
+    """Kind が登録されているか (home overlay + templates の和集合で判定)。"""
     return get_kind(name, kinds_dir=kinds_dir) is not None
 
 

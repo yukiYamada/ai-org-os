@@ -57,6 +57,9 @@ DEFAULT_ISSUES_DIR = _default_issues_dir()
 
 # 入力検証。spawn-mind.sh / conduit/storage.py と同じ文字集合に揃える。
 SUBMITTER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Phase 5c-1 (#87 / ADR-0019): guild name も同じ集合。
+GUILD_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+DEFAULT_GUILD = "default"
 ALLOWED_PRIORITIES = ("p0", "p1", "p2", "p3")
 TITLE_MAX_LEN = 200
 
@@ -81,6 +84,7 @@ class IssueRecord:
 
     `path` は実体ファイルの絶対パス（inbox 側 or archive 側）。
     `body` は frontmatter を除いた Markdown 本文（末尾改行は維持されない）。
+    `guild` は所属 Guild 名 (Phase 5c-1 / ADR-0019)。
     """
 
     issue_id: str
@@ -90,6 +94,7 @@ class IssueRecord:
     priority: str
     path: Path
     body: str
+    guild: str = DEFAULT_GUILD
 
 
 # ---- 内部ヘルパ ---------------------------------------------------------------
@@ -134,6 +139,18 @@ def _validate_submitter(submitter: str) -> None:
         )
 
 
+def _validate_guild(guild: str) -> None:
+    """Guild name shape check (Phase 5c-1 / ADR-0019)。
+
+    存在チェック (manifest があるか) は呼び出し側 (submit_issue) で別途
+    行う。本関数は文字列形式のみ検証する (path traversal 等の防御)。
+    """
+    if not isinstance(guild, str) or not GUILD_NAME_RE.match(guild):
+        raise IssueValidationError(
+            f"invalid guild: must match {GUILD_NAME_RE.pattern}"
+        )
+
+
 def _validate_priority(priority: str) -> None:
     if priority not in ALLOWED_PRIORITIES:
         raise IssueValidationError(
@@ -173,6 +190,7 @@ def _build_payload(
     submitter: str,
     priority: str,
     body: str,
+    guild: str = DEFAULT_GUILD,
 ) -> str:
     """frontmatter + 本文の Markdown を組み立てる。"""
     return (
@@ -182,6 +200,7 @@ def _build_payload(
         f"submitted_at: {submitted_at}\n"
         f"submitter: {submitter}\n"
         f"priority: {priority}\n"
+        f"guild: {guild}\n"
         "---\n\n"
         f"{body}\n"
     )
@@ -237,6 +256,12 @@ def _parse_issue_file(path: Path) -> IssueRecord | None:
         body_lines = body_lines[1:]
     body = "\n".join(body_lines)
 
+    # Phase 5c-1 / ADR-0019: guild フィールド。後方互換のため未設定なら default。
+    # 形式違反は default 扱い (file 偽装防御 + 旧 Issue 互換)。
+    guild = meta.get("guild", DEFAULT_GUILD) or DEFAULT_GUILD
+    if not GUILD_NAME_RE.match(guild):
+        guild = DEFAULT_GUILD
+
     return IssueRecord(
         issue_id=meta["issue_id"],
         title=meta["title"],
@@ -245,6 +270,7 @@ def _parse_issue_file(path: Path) -> IssueRecord | None:
         priority=meta["priority"],
         path=path,
         body=body,
+        guild=guild,
     )
 
 
@@ -257,6 +283,7 @@ def submit_issue(
     *,
     priority: str = "p2",
     submitter: str = "human",
+    guild: str = DEFAULT_GUILD,
     issues_dir: Path | None = None,
     now: dt.datetime | None = None,
 ) -> Path:
@@ -267,6 +294,9 @@ def submit_issue(
         body:      Markdown 本文（複数行可、検証なし）。
         priority:  p0 / p1 / p2 / p3 のいずれか。デフォルト p2。
         submitter: `[A-Za-z0-9._-]{1,64}` にマッチする識別子。デフォルト `human`。
+        guild:     所属 Guild 名 (Phase 5c-1 / ADR-0019)。形式のみ検証、
+                   manifest 存在チェックは行わない (本関数は inbox storage 専念)。
+                   呼び出し側 (submit-issue.sh CLI) で必要に応じ manifest 検証する。
         issues_dir: 保管ルート。None なら DEFAULT_ISSUES_DIR。テストで差し替え可。
         now:       タイムスタンプ生成用の現在時刻（UTC aware）。テストで固定可。
 
@@ -274,7 +304,7 @@ def submit_issue(
         書き込んだ Issue ファイルの絶対パス（inbox 側）。
 
     例外:
-        IssueValidationError: title / submitter / priority / body が不正な場合。
+        IssueValidationError: title / submitter / priority / body / guild が不正な場合。
 
     並行性:
         - issue_id は内部生成（外部入力にしない）。path traversal は構造的に不可。
@@ -284,6 +314,7 @@ def submit_issue(
     _validate_title(title)
     _validate_submitter(submitter)
     _validate_priority(priority)
+    _validate_guild(guild)
     if not isinstance(body, str):
         raise IssueValidationError("body must be a string")
 
@@ -323,6 +354,7 @@ def submit_issue(
             submitter=submitter,
             priority=priority,
             body=body,
+            guild=guild,
         )
         tmp_path.write_text(serialized, encoding="utf-8")
         try:
@@ -342,6 +374,33 @@ def submit_issue(
             except OSError:
                 pass
         return final_path
+
+
+def peek_pending_issue(
+    issue_id: str,
+    issues_dir: Path | None = None,
+) -> IssueRecord:
+    """inbox にある 1 件の Issue を「claim せずに」読む (Phase 5c-1 / ADR-0019)。
+
+    nexus.py の claim_issue が「guild 一致を確認してから claim」するために使う。
+    list_pending_issues を全走査するより O(1) で済む。
+
+    例外:
+        IssueValidationError: issue_id 形式違反
+        IssueNotFoundError:   inbox に該当ファイルが無い、または parse 不能
+    """
+    _validate_issue_id(issue_id)
+    base = _resolve_issues_dir(issues_dir)
+    inbox = base / "inbox"
+    path = inbox / f"{issue_id}.md"
+    if not path.is_file():
+        raise IssueNotFoundError(f"issue '{issue_id}' not in inbox")
+    rec = _parse_issue_file(path)
+    if rec is None:
+        raise IssueNotFoundError(
+            f"issue '{issue_id}' is unparseable (frontmatter invalid)"
+        )
+    return rec
 
 
 def list_pending_issues(
@@ -536,6 +595,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
             body=args.body,
             priority=args.priority,
             submitter=args.submitter,
+            guild=args.guild,
             issues_dir=issues_dir,
         )
     except IssueValidationError as exc:
@@ -595,6 +655,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--submitter",
         default="human",
         help="投入者識別子（[A-Za-z0-9._-]{1,64}）",
+    )
+    p_submit.add_argument(
+        "--guild",
+        default=DEFAULT_GUILD,
+        help=f"所属 Guild 名 (default: {DEFAULT_GUILD}, ADR-0019)。"
+             f"形式: [A-Za-z0-9._-]{{1,64}}",
     )
     p_submit.set_defaults(func=_cmd_submit)
 

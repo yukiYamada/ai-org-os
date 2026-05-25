@@ -52,17 +52,31 @@ memory `feedback-publish-concept-first` (2026-05-24) に固定済:
 
 ### 1. Guild の物理表現
 
+> **2026-05-25 更新 (ADR-0020)**: 当初 `runtime/guilds/<name>/` に置く設計だったが、
+> 「組織依存物は世界の構成 (runtime/) と物理分離する」という ADR-0020 を採用した
+> ため、以下のように **templates + AI_ORG_OS_HOME の 2 layer overlay** に変更:
+>
+> 1. **同梱テンプレ**: `templates/guilds/<name>/` (ai-org-os repo 内、例示用)
+> 2. **利用者の実体**: `$AI_ORG_OS_HOME/guilds/<name>/` (利用者所有、別 repo 可)
+>
+> Pillar は lookup 時、home → templates の順に探し、最初に見つかった manifest を
+> 採用する。default Guild は templates 同梱なので、利用者が何もしなくても動く。
+
 ```
-runtime/guilds/<guild-name>/
+templates/guilds/<guild-name>/        ← 同梱テンプレ (ADR-0020 fallback 層)
 ├── manifest.md      # purpose, version, kind list, persona list, schema-version
 └── axiom.md         # この Guild の不変項（claim 制約 / Mind 行動規範）
+
+$AI_ORG_OS_HOME/guilds/<guild-name>/  ← 利用者の組織実体 (ADR-0020 overlay 上層)
+├── manifest.md
+└── axiom.md
 ```
 
-Guild ディレクトリには **immutable な定義のみ** を置く (`manifest.md` + `axiom.md`)。ADR-0018 により repo は read-only として扱われるため、mutable state は一切含めない。
+Guild ディレクトリには **immutable な定義のみ** を置く (`manifest.md` + `axiom.md`)。runtime state (members / claim 履歴等) は一切含めない。
 
-- **default Guild** (例: `runtime/guilds/default/`) を framework 配下 (= repo 内) に置く。これは ADR-0011 と同様の「コアが提供する例」に相当
-- **ユーザー定義 Guild** は将来 `$AI_ORG_OS_HOME/guilds/<name>/` でも置けるようにする (Phase 5c-2 以降、ADR-0018 整合)
-- Guild ディレクトリは **そのまま `cp -r` / `git clone` で配布可能**: 受け取った人は配置すれば動く
+- **default Guild** は `templates/guilds/default/` に framework と同梱する。これは「コアが提供する出発点」(ADR-0011) であり、利用者は `$AI_ORG_OS_HOME/guilds/default/` で上書きするか、別名 Guild を追加して使う
+- **ユーザー定義 Guild** は `$AI_ORG_OS_HOME/guilds/<name>/` に置く (Phase 5c-1 で実装、ADR-0018 / ADR-0020 整合)
+- Guild ディレクトリは **そのまま `cp -r` / `git clone` で配布可能**: 受け取った人は `$AI_ORG_OS_HOME/guilds/<name>/` に配置すれば動く (本 ADR の「組織パッケージ」概念の物理表現)
 
 #### Membership は派生状態（authoritative source は `.mind-meta.md`）
 

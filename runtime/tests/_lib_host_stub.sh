@@ -20,13 +20,26 @@ stub_host_config_init() {
     echo "[stub_host_config_init] ERROR: tmp dir not provided or missing" >&2
     return 1
   fi
-  local stub_py="${tmp_dir}/stub-python.exe"
+  # Phase 5c-1 (#87 / ADR-0019): spawn-mind が guild.py を実行するため、
+  # HOST_PYTHON_BIN は実際に動く Python である必要がある (旧 stub は空ファイル
+  # でファイル存在 check のみ通っていたが、いまは validate を実行する)。
+  # stub-nexus.py は中身が呼ばれない (spawn-mind は file 存在のみ check) ので
+  # touch のみで OK。
+  local real_py
+  if command -v python3 >/dev/null 2>&1; then
+    real_py="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    real_py="$(command -v python)"
+  else
+    echo "[stub_host_config_init] ERROR: python not found" >&2
+    return 2
+  fi
   local stub_nexus="${tmp_dir}/stub-nexus.py"
   local stub_config="${tmp_dir}/stub-host-config.env"
-  touch "${stub_py}" "${stub_nexus}"
+  touch "${stub_nexus}"
   cat > "${stub_config}" <<CFG
 AI_ORG_OS_HOME=${tmp_dir}
-HOST_PYTHON_BIN=${stub_py}
+HOST_PYTHON_BIN=${real_py}
 HOST_NEXUS_PY=${stub_nexus}
 HOST_RUNTIME_DIR=${RUNTIME_DIR:-/tmp}
 HOST_SETUP_AT=test-stub

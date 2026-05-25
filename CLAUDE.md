@@ -22,13 +22,14 @@ Realm（Docker container）の中に Warden（世界そのもの = Pillar 群）
 
 ### 3.1 「Designer 視点で前提を問う」 — 実装着手前
 
-本セッションで 3 連続で踏んだ穴:
+本セッションで 4 連続で踏んだ穴:
 
 | やった | 何を見落としていた | 結果 |
 |---|---|---|
 | 「Conductor が Issue を claim する」と提案 | Warden 監視 vs ジョブ監視の責務混同 (ADR-0017) | operator から「Warden の MCP ならまだしも、Mind の作業の監視は Mind がやる、じゃない?」 |
 | `runtime/host/.venv/` に host venv を作る | framework と runtime state を git tracked dir に同居 (ADR-0018) | operator から「環境とgitでおかしくならない? 別ディレクトリじゃない?」 |
 | Phase 5b-4 で path 移動 | Dockerfile CMD と observe.py --realm の path 追従漏れ | Real E2E で初めて検出 |
+| `runtime/guilds/default/` に Guild manifest を置く | 世界の構成 (runtime/) と注入される依存物 (組織パッケージ) の混同 (ADR-0020) | operator から「またruntimeの中に実体をいれちゃってるの? runtimeは構成要素であって、manifestは実体だよね?」 |
 
 **共通パターン**: 「とりあえず動かす」優先で **1 段抽象の構造** を見落とす。
 **対処**: 実装に手をつける前に、口に出して以下を自問する:
@@ -38,6 +39,7 @@ Realm（Docker container）の中に Warden（世界そのもの = Pillar 群）
 - 「これは ADR-0014 の物理境界カテゴリ A / B / C / D どこ?」(内側 / 穴あき / 外部依存 / 人間制御)
 - 「これは ADR-0016 の Container / ホストどっち?」(コア / Mind)
 - 「これは ADR-0012 の人間責務 1〜5 どれ? それとも Warden / Mind の責務?」
+- 「これは ADR-0020 の **世界の構成自体 / 同梱テンプレ / 依存物の実体 / runtime state** どれ?」(`runtime/` / `templates/` / `$AI_ORG_OS_HOME/<category>/` / `$AI_ORG_OS_HOME/{minds,issues,...}`)
 
 迷ったら **既存 ADR を読み直す**。新カテゴリが必要なら **新 ADR を起こす**。実装で踏み外す前に。
 

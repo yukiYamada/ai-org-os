@@ -16,4 +16,8 @@ fi
 PYTHON_BIN="$(command -v python3 || command -v python)"
 
 cd "${NEXUS_DIR}"
-"${PYTHON_BIN}" -m unittest test_storage -v 2>&1
+# test_storage: std lib only, always runs.
+# test_nexus_tool: nexus.py 経由で MCP tool 層を検証。mcp パッケージが
+#   無ければファイル内で skip するため、ホスト python に mcp が入って
+#   いない環境でも safe (Phase 5c-1 / ADR-0019)。
+"${PYTHON_BIN}" -m unittest test_storage test_nexus_tool -v 2>&1
