@@ -22,6 +22,7 @@
 set -euo pipefail
 
 START_LOOP=0
+GUILD="default"
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -29,16 +30,36 @@ while [ "$#" -gt 0 ]; do
       START_LOOP=1
       shift
       ;;
+    --guild)
+      if [ "$#" -lt 2 ]; then
+        echo "[ERROR] --guild requires a value" >&2
+        exit 1
+      fi
+      GUILD="$2"
+      shift 2
+      ;;
+    --guild=*)
+      GUILD="${1#--guild=}"
+      shift
+      ;;
     -h|--help)
       cat <<HELP
-Usage: $0 [--start-loop] <kind> <persona> <mind-name>
+Usage: $0 [--start-loop] [--guild <name>] <kind> <persona> <mind-name>
 
 Options:
-  --start-loop   Launch mind-loop.sh in the background after spawning (ADR-0010).
+  --start-loop      Launch mind-loop.sh in the background after spawning (ADR-0010).
+  --guild <name>    Guild to which this Mind belongs (default: "default", ADR-0019).
+                    Manifest is looked up at \$AI_ORG_OS_HOME/guilds/<name>/manifest.md
+                    first (overlay), then templates/guilds/<name>/manifest.md
+                    (ADR-0020). The manifest must list this kind/persona.
+
+Kind / Persona lookup (Phase 5c-1 / ADR-0020):
+  \$AI_ORG_OS_HOME/{kinds,personas}/<name>.md (overlay) → templates/{kinds,personas}/<name>.md
 
 Example:
-  $0 generic designer my-first-mind                 # spawn only, user runs claude manually
-  $0 --start-loop generic designer my-first-mind    # spawn and start the external loop
+  $0 generic designer my-first-mind                          # default guild
+  $0 --guild backend generic designer my-backend-mind        # explicit guild
+  $0 --start-loop generic designer my-first-mind             # spawn and start loop
 HELP
       exit 0
       ;;
@@ -50,7 +71,7 @@ HELP
 done
 
 if [ "${#ARGS[@]}" -ne 3 ]; then
-  echo "Usage: $0 [--start-loop] <kind> <persona> <mind-name>" >&2
+  echo "Usage: $0 [--start-loop] [--guild <name>] <kind> <persona> <mind-name>" >&2
   echo "Example: $0 generic designer my-first-mind" >&2
   exit 1
 fi
@@ -78,29 +99,57 @@ validate_arg() {
 validate_arg "kind" "${KIND}"
 validate_arg "persona" "${PERSONA}"
 validate_arg "mind-name" "${MIND_NAME}"
+validate_arg "guild" "${GUILD}"
 
 # Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。
-# kinds / personas はコード扱いで repo 内 (runtime/{kinds,personas}/)。
 # Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/<name>/ で
 # repo 外、runtime state 扱い。
+# Phase 5c-1 (#87 / ADR-0020): kinds / personas / guilds は組織依存物。
+# 物理的に templates/ (同梱テンプレ) と $AI_ORG_OS_HOME/<category>/ (実体) の
+# 2 layer overlay で解決する。home が無ければ templates にフォールバック。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-KIND_FILE="${RUNTIME_DIR}/kinds/${KIND}.md"
-PERSONA_FILE="${RUNTIME_DIR}/personas/${PERSONA}.md"
+REPO_DIR="$(cd "${RUNTIME_DIR}/.." && pwd)"
+TEMPLATES_DIR="${REPO_DIR}/templates"
 # AI_ORG_OS_HOME を解決 (env or default ~/.ai-org-os)。config.env でも上書きされる。
 DEFAULT_RUNTIME_HOME="${HOME:-${USERPROFILE:-}}/.ai-org-os"
 RUNTIME_HOME="${AI_ORG_OS_HOME:-${DEFAULT_RUNTIME_HOME}}"
 MIND_DIR="${RUNTIME_HOME}/minds/${MIND_NAME}"
 
-if [ ! -f "${KIND_FILE}" ]; then
-  echo "[ERROR] Kind '${KIND}' is not registered (looked for ${KIND_FILE})" >&2
-  echo "[HINT] List available Kinds: ls ${RUNTIME_DIR}/kinds/" >&2
+# Phase 5c-1 / ADR-0020: 2 layer overlay の path 解決。
+# 引数: $1=category (kinds|personas), $2=name. 見つかった path を echo。
+# 失敗時は空文字列を echo して return 1。
+resolve_overlay_md() {
+  local category="$1"
+  local name="$2"
+  local home_path="${RUNTIME_HOME}/${category}/${name}.md"
+  local template_path="${TEMPLATES_DIR}/${category}/${name}.md"
+  if [ -f "${home_path}" ]; then
+    echo "${home_path}"
+    return 0
+  fi
+  if [ -f "${template_path}" ]; then
+    echo "${template_path}"
+    return 0
+  fi
+  echo ""
+  return 1
+}
+
+KIND_FILE="$(resolve_overlay_md kinds "${KIND}" || true)"
+PERSONA_FILE="$(resolve_overlay_md personas "${PERSONA}" || true)"
+
+if [ -z "${KIND_FILE}" ]; then
+  echo "[ERROR] Kind '${KIND}' is not registered." >&2
+  echo "[HINT] Looked in ${RUNTIME_HOME}/kinds/ (overlay) and ${TEMPLATES_DIR}/kinds/ (templates)." >&2
+  echo "[HINT] List bundled templates: ls ${TEMPLATES_DIR}/kinds/" >&2
   exit 2
 fi
 
-if [ ! -f "${PERSONA_FILE}" ]; then
-  echo "[ERROR] Persona '${PERSONA}' not found (looked for ${PERSONA_FILE})" >&2
-  echo "[HINT] List available Personas: ls ${RUNTIME_DIR}/personas/" >&2
+if [ -z "${PERSONA_FILE}" ]; then
+  echo "[ERROR] Persona '${PERSONA}' not found." >&2
+  echo "[HINT] Looked in ${RUNTIME_HOME}/personas/ (overlay) and ${TEMPLATES_DIR}/personas/ (templates)." >&2
+  echo "[HINT] List bundled templates: ls ${TEMPLATES_DIR}/personas/" >&2
   exit 3
 fi
 
@@ -157,6 +206,45 @@ if [ "${START_LOOP}" = "1" ]; then
   fi
 fi
 
+# Phase 5c-1 (#88 Codex P2): Kind の registration を Registry Pillar で再検証。
+# resolve_overlay_md は file 存在のみで通すため、home overlay (例:
+# $AI_ORG_OS_HOME/kinds/<KIND>.md) が parse 不能でも spawn が進んでしまう。
+# 一方 registry.py check は overlay shadow consistency を強制するので、
+# 「Registry says unregistered なのに spawn は通る」不整合が起きる。
+# spawn 前に registry.py check で parse まで含めた検証を行う。
+REGISTRY_PY="${RUNTIME_DIR}/pillars/registry/registry.py"
+if [ ! -f "${REGISTRY_PY}" ]; then
+  echo "[ERROR] registry.py not found at ${REGISTRY_PY}" >&2
+  echo "[HINT] Phase 5a-4 implementation may be incomplete; please reinstall ai-org-os." >&2
+  exit 10
+fi
+echo "[spawn-mind] Verifying Kind registration via Registry Pillar: ${KIND}"
+if ! "${HOST_PYTHON_BIN}" "${REGISTRY_PY}" check "${KIND}"; then
+  echo "[ERROR] Kind '${KIND}' is not registered (or its overlay file is malformed)." >&2
+  echo "[HINT] List registered Kinds: ${HOST_PYTHON_BIN} ${REGISTRY_PY} list" >&2
+  echo "[HINT] Inspect Kind:           ${HOST_PYTHON_BIN} ${REGISTRY_PY} get ${KIND}" >&2
+  echo "[HINT] If you edited \$AI_ORG_OS_HOME/kinds/${KIND}.md, verify its frontmatter." >&2
+  exit 2
+fi
+
+# Phase 5c-1 (#87 / ADR-0019): Guild membership 検証。
+# 指定 Guild の manifest.md に kind / persona が含まれていなければ spawn を拒否。
+# guild.py は Registry Pillar 配下にあり、framework のみ参照 (mutable state を読まない)。
+GUILD_PY="${RUNTIME_DIR}/pillars/registry/guild.py"
+if [ ! -f "${GUILD_PY}" ]; then
+  echo "[ERROR] guild.py not found at ${GUILD_PY}" >&2
+  echo "[HINT] Phase 5c-1 implementation may be incomplete; please reinstall ai-org-os." >&2
+  exit 10
+fi
+echo "[spawn-mind] Validating membership: guild='${GUILD}' kind='${KIND}' persona='${PERSONA}'"
+if ! "${HOST_PYTHON_BIN}" "${GUILD_PY}" validate \
+    --guild "${GUILD}" --kind "${KIND}" --persona "${PERSONA}"; then
+  echo "[ERROR] Guild membership validation failed." >&2
+  echo "[HINT] List available guilds: ${HOST_PYTHON_BIN} ${GUILD_PY} list" >&2
+  echo "[HINT] Inspect manifest:      ${HOST_PYTHON_BIN} ${GUILD_PY} show ${GUILD}" >&2
+  exit 11
+fi
+
 echo "[spawn-mind] Creating Mindspace: ${MIND_DIR}"
 mkdir -p "${MIND_DIR}"
 
@@ -168,6 +256,7 @@ cat > "${MIND_DIR}/.mind-meta.md" <<EOF
 mind_name: ${MIND_NAME}
 kind: ${KIND}
 persona: ${PERSONA}
+guild: ${GUILD}
 spawned_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 phase: 1+3
 ---
@@ -176,6 +265,9 @@ phase: 1+3
 
 このファイルは暫定的なメタデータです。
 Phase 5 以降は Warden がより構造化された形で管理します。
+
+guild フィールドは Phase 5c-1 (ADR-0019) で追加。
+所属 Guild の authoritative source として nexus.py の claim_issue で参照される。
 EOF
 
 # Phase 3 + 5b-3: Nexus (MCP server) への接続設定を Mindspace に配置。

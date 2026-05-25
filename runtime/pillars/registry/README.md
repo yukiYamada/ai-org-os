@@ -4,7 +4,14 @@
 
 ai-org-os の **Mind Kind Registry 最小実装**。Python 標準ライブラリのみ、依存ゼロ。
 
-`runtime/kinds/*.md` を走査して Kind カタログを構築し、Warden（および将来の Guildmaster）が「どの Kind で Mind を spawn 可能か」を問い合わせる API を提供する。
+2 layer overlay (ADR-0020) で Kind カタログを構築し、Warden（および将来の Guildmaster）が「どの Kind で Mind を spawn 可能か」を問い合わせる API を提供する:
+
+1. `$AI_ORG_OS_HOME/kinds/*.md` — 利用者の Kind 実体 (overlay 上層、優先)
+2. `templates/kinds/*.md` — ai-org-os 同梱テンプレ (fallback 下層)
+
+同名 Kind が両層に居る場合、上層が下層をマスクする。
+
+Phase 5c-1 で **Guild catalog (`guild.py`)** も同じ流儀で本 Pillar に同居。
 
 設計の根拠は以下の ADR：
 
@@ -17,8 +24,10 @@ ai-org-os の **Mind Kind Registry 最小実装**。Python 標準ライブラリ
 
 ```
 runtime/pillars/registry/
-├── registry.py          ← list_kinds / get_kind / is_registered + CLI
-├── test_registry.py     ← unittest（標準ライブラリ）
+├── registry.py          ← Kind catalog: list_kinds / get_kind / is_registered + CLI
+├── guild.py             ← Guild catalog: load_manifest / validate_membership / enumerate_members + CLI (Phase 5c-1)
+├── test_registry.py     ← Kind の unittest
+├── test_guild.py        ← Guild の unittest (Phase 5c-1)
 └── README.md
 ```
 
@@ -47,8 +56,10 @@ python3 runtime/pillars/registry/registry.py check generic
   total: 1
 
 NAME                 VERSION    STATUS         PATH
-generic              0.1        experimental   /path/to/runtime/kinds/generic.md
+generic              0.1        experimental   /path/to/templates/kinds/generic.md
 ```
+
+`PATH` カラムから「これは templates 同梱 (= ai-org-os に投げ返す PR で更新)」「これは home 実体 (= 自分の repo / `$AI_ORG_OS_HOME`)」が判別できる。
 
 ### Python API
 
@@ -73,18 +84,16 @@ if not is_registered("generic"):
 
 ## spawn-mind.sh との整合
 
-`runtime/pillars/lifecycle/spawn-mind.sh` は既に未登録 Kind を `exit 2` で拒否している（`runtime/kinds/<name>.md` の存在チェック）。Registry はこの判定を**同じファイル基盤**で行うので、両者の判定は一致する。
+`runtime/pillars/lifecycle/spawn-mind.sh` は未登録 Kind を `exit 2` で拒否している。Phase 5c-1 (ADR-0020) 以降は、両者とも 2 layer overlay (`$AI_ORG_OS_HOME/kinds/` → `templates/kinds/`) を見るので判定は一致する。
 
-- spawn-mind.sh: `[ -f "${RUNTIME_DIR}/kinds/${KIND}.md" ]`
-- Registry: `is_registered(name)` = `(runtime/kinds/<name>.md が存在) AND (frontmatter が読める)`
+- spawn-mind.sh: `resolve_overlay_md kinds "${KIND}"` (home → templates)
+- Registry: `is_registered(name)` = `(home または templates に <name>.md が存在) AND (frontmatter が読める)`
 
 Registry の方が厳しい（frontmatter が壊れているファイルは未登録扱い）が、現状は generic.md が唯一の Kind でこれは正常なので差は出ない。
 
-将来的に spawn-mind.sh が Registry を呼ぶ形に変える（Phase 5b 以降）と、判定ロジックを 1 か所に集約できる。
-
 ## 不可侵原則との関係
 
-- Mindspace の中身に触れない（runtime/kinds/ のみを読む）
+- Mindspace の中身に触れない（kinds / guilds source のみを読む）
 - Kind 定義ファイルは Pillar 領域の所有物（メタデータ）
 
 ## セキュリティ

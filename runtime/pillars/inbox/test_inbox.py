@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from inbox import (  # noqa: E402
     ALLOWED_PRIORITIES,
+    DEFAULT_GUILD,
     ISSUE_ID_RE,
     IssueNotFoundError,
     IssueRecord,
@@ -37,6 +38,7 @@ from inbox import (  # noqa: E402
     claim_issue,
     list_pending_issues,
     main,
+    peek_pending_issue,
     submit_issue,
 )
 
@@ -466,6 +468,135 @@ class TestClaimIssue(unittest.TestCase):
         self.assertEqual(len(results), 1, f"exactly one claim must win, got {results}")
         self.assertEqual(len(errors), 1, f"the loser must see NotFound, got {errors}")
         self.assertIsInstance(errors[0], IssueNotFoundError)
+
+
+class TestGuildField(unittest.TestCase):
+    """Phase 5c-1 / ADR-0019: Issue が `guild:` フィールドを持つこと、
+    invalid なら拒否、未設定 / 形式違反は default にフォールバックすること。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.issues_dir = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_default_guild_when_not_specified(self) -> None:
+        path = submit_issue("t", "b", issues_dir=self.issues_dir)
+        records = list_pending_issues(issues_dir=self.issues_dir)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].guild, DEFAULT_GUILD)
+        self.assertIn(f"guild: {DEFAULT_GUILD}", path.read_text(encoding="utf-8"))
+
+    def test_explicit_guild_is_recorded(self) -> None:
+        submit_issue(
+            "t", "b", guild="backend", issues_dir=self.issues_dir
+        )
+        records = list_pending_issues(issues_dir=self.issues_dir)
+        self.assertEqual(records[0].guild, "backend")
+
+    def test_invalid_guild_rejected(self) -> None:
+        for bad in ["", "has space", "../escape", "x" * 65, "guild/with/slash"]:
+            with self.subTest(guild=bad):
+                with self.assertRaises(IssueValidationError):
+                    submit_issue(
+                        "t", "b", guild=bad, issues_dir=self.issues_dir,
+                    )
+
+    def test_legacy_issue_without_guild_field_defaults(self) -> None:
+        """Phase 5c-1 以前に作られた Issue (guild フィールド無し) は default 扱い。"""
+        inbox = self.issues_dir / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        # frontmatter から guild を抜いた Issue を手書き
+        iid = "20260524T120000Z-000001-deadbeef"
+        legacy = (
+            "---\n"
+            f"issue_id: {iid}\n"
+            "title: legacy\n"
+            "submitted_at: 2026-05-24T12:00:00Z\n"
+            "submitter: human\n"
+            "priority: p2\n"
+            "---\n\nlegacy body\n"
+        )
+        (inbox / f"{iid}.md").write_text(legacy, encoding="utf-8")
+        records = list_pending_issues(issues_dir=self.issues_dir)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].guild, DEFAULT_GUILD)
+
+    def test_malformed_guild_field_falls_back_to_default(self) -> None:
+        """frontmatter の guild: が形式違反のときも parse は通り default 扱いになる。
+
+        手書き偽装 (`guild: ../escape`) でも path traversal にならないこと。
+        """
+        inbox = self.issues_dir / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        iid = "20260524T120001Z-000002-cafef00d"
+        malformed = (
+            "---\n"
+            f"issue_id: {iid}\n"
+            "title: bad guild\n"
+            "submitted_at: 2026-05-24T12:00:01Z\n"
+            "submitter: human\n"
+            "priority: p2\n"
+            "guild: ../escape\n"
+            "---\n\nbody\n"
+        )
+        (inbox / f"{iid}.md").write_text(malformed, encoding="utf-8")
+        records = list_pending_issues(issues_dir=self.issues_dir)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].guild, DEFAULT_GUILD)
+
+
+class TestPeekPendingIssue(unittest.TestCase):
+    """Phase 5c-1 / ADR-0019: peek (claim せずに 1 件だけ frontmatter を読む) API。
+
+    Nexus.claim_issue が「guild 一致を先にチェックしてから claim」するために使う。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.issues_dir = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_returns_record_without_moving_to_archive(self) -> None:
+        path = submit_issue(
+            "t", "b", guild="backend", issues_dir=self.issues_dir,
+        )
+        rec = peek_pending_issue(path.stem, issues_dir=self.issues_dir)
+        self.assertEqual(rec.title, "t")
+        self.assertEqual(rec.guild, "backend")
+        # peek 後も inbox に残っている (移動していない)
+        self.assertTrue(path.exists())
+
+    def test_unknown_id_raises(self) -> None:
+        unknown = "20260524T120000Z-000000-00000000"
+        with self.assertRaises(IssueNotFoundError):
+            peek_pending_issue(unknown, issues_dir=self.issues_dir)
+
+    def test_invalid_id_raises(self) -> None:
+        with self.assertRaises(IssueValidationError):
+            peek_pending_issue("not-an-id", issues_dir=self.issues_dir)
+
+    def test_does_not_find_archived_issues(self) -> None:
+        # peek は inbox 専用。claim 後の archive にあるものは見えない (lookup は inbox)。
+        path = submit_issue("t", "b", issues_dir=self.issues_dir)
+        iid = path.stem
+        claim_issue(iid, issues_dir=self.issues_dir)
+        with self.assertRaises(IssueNotFoundError):
+            peek_pending_issue(iid, issues_dir=self.issues_dir)
+
+    def test_unparseable_file_raises(self) -> None:
+        inbox = self.issues_dir / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        iid = "20260524T120000Z-000003-12345678"
+        # frontmatter の閉じ `---` が無い → _parse_issue_file が None を返す
+        (inbox / f"{iid}.md").write_text(
+            "---\nissue_id: x\n", encoding="utf-8"
+        )
+        with self.assertRaises(IssueNotFoundError):
+            peek_pending_issue(iid, issues_dir=self.issues_dir)
 
 
 class TestPathTraversalDefense(unittest.TestCase):

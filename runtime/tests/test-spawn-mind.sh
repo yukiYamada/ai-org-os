@@ -9,6 +9,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_DIR="$(cd "${RUNTIME_DIR}/.." && pwd)"
 # Phase 5a-2: Lifecycle Pillar is at runtime/pillars/lifecycle/ (ADR-0011).
 SPAWN="${RUNTIME_DIR}/pillars/lifecycle/spawn-mind.sh"
 
@@ -124,12 +125,16 @@ mind_dir="${AI_ORG_OS_HOME}/minds/${mind}"
 assert_file_exists "Mindspace CLAUDE.md" "${mind_dir}/CLAUDE.md"
 assert_file_exists "Mindspace .mind-meta.md" "${mind_dir}/.mind-meta.md"
 assert_file_exists "Mindspace .mcp.json (Nexus 接続)" "${mind_dir}/.mcp.json"
-assert_files_equal "CLAUDE.md == designer Persona" \
+# Phase 5c-1 / ADR-0020: Persona は templates/personas/ から overlay 解決される。
+# AI_ORG_OS_HOME 配下に personas 実体が無ければ templates が fallback として使われる。
+assert_files_equal "CLAUDE.md == designer Persona (templates)" \
   "${mind_dir}/CLAUDE.md" \
-  "${RUNTIME_DIR}/personas/designer.md"
+  "${REPO_DIR}/templates/personas/designer.md"
 assert_file_contains "meta has mind_name" "${mind_dir}/.mind-meta.md" "mind_name: ${mind}"
 assert_file_contains "meta has kind" "${mind_dir}/.mind-meta.md" "kind: generic"
 assert_file_contains "meta has persona" "${mind_dir}/.mind-meta.md" "persona: designer"
+# Phase 5c-1 / ADR-0019: --guild 省略時は default Guild に所属
+assert_file_contains "meta has guild=default" "${mind_dir}/.mind-meta.md" "guild: default"
 assert_file_contains ".mcp.json references nexus server" "${mind_dir}/.mcp.json" '"nexus"'
 assert_file_contains ".mcp.json references nexus.py" "${mind_dir}/.mcp.json" "nexus.py"
 # Issue #19 (ADR-0008): .mcp.json must bind the Nexus session to this Mind's identity.
@@ -269,6 +274,81 @@ AI_ORG_OS_HOST_CONFIG="${empty_cfg}" \
 code=$?
 set -e
 assert_exit_code "HOST_PYTHON_BIN empty" 5 "${code}"
+
+echo "[case] 9. --guild default を明示しても happy path (Phase 5c-1 / ADR-0019)"
+mind_g="${TEST_ID}-g-default"
+set +e
+"${SPAWN}" --guild default generic designer "${mind_g}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "explicit --guild default" 0 "${code}"
+assert_file_contains "meta records explicit guild" \
+  "${AI_ORG_OS_HOME}/minds/${mind_g}/.mind-meta.md" "guild: default"
+
+echo "[case] 10. --guild=default も同じく動く"
+mind_geq="${TEST_ID}-g-eq"
+set +e
+"${SPAWN}" --guild=default generic designer "${mind_geq}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "--guild=default (equals form)" 0 "${code}"
+
+echo "[case] 11. 存在しない Guild は exit 11 (manifest が無い)"
+mind_nog="${TEST_ID}-no-guild"
+set +e
+"${SPAWN}" --guild "no-such-guild-${TEST_ID}" generic designer "${mind_nog}" \
+  >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "unknown guild" 11 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_nog}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("unknown guild: Mindspace should not be created")
+  echo "  [NG]   unknown guild: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   unknown guild: no Mindspace leaked"
+fi
+
+echo "[case] 12. --guild が形式違反は exit 6 (validate_arg)"
+mind_badg="${TEST_ID}-bad-guild"
+set +e
+"${SPAWN}" --guild '../escape' generic designer "${mind_badg}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "guild path traversal" 6 "${code}"
+
+echo "[case] 13. --guild に渡す引数が空文字は exit 6"
+mind_emptyg="${TEST_ID}-empty-guild"
+set +e
+"${SPAWN}" --guild '' generic designer "${mind_emptyg}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "empty guild" 6 "${code}"
+
+echo "[case] 14. malformed home Kind は Registry 経由で exit 2 (Codex P2 #88)"
+# 利用者が $AI_ORG_OS_HOME/kinds/generic.md を frontmatter 壊して
+# 上書きしたケース。resolve_overlay_md は file 存在で通すが registry.py check は
+# parse 不能を捉えて exit 1 を返し、spawn-mind は exit 2 で fail する。
+mind_bad_kind="${TEST_ID}-bad-kind"
+mkdir -p "${AI_ORG_OS_HOME}/kinds"
+echo "no frontmatter here" > "${AI_ORG_OS_HOME}/kinds/generic.md"
+set +e
+"${SPAWN}" generic designer "${mind_bad_kind}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "malformed home kind rejected by Registry" 2 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_bad_kind}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("malformed home kind: Mindspace should not be created")
+  echo "  [NG]   malformed home kind: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   malformed home kind: no Mindspace leaked"
+fi
+# fixture を片付けて以降のテストに影響しないように
+rm -f "${AI_ORG_OS_HOME}/kinds/generic.md"
+rmdir "${AI_ORG_OS_HOME}/kinds" 2>/dev/null || true
 
 echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
 # --start-loop は spawn 時点で claude バイナリを事前検証する。

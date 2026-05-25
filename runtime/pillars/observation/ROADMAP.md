@@ -289,7 +289,7 @@ ADR-0010 §4 で「Mind の観測は Axiom 制約下」と確定。Pillar とし
 1. `runtime/pillars/observation/anomaly.py` 新設。以下のシグナルを `warning` / `info` で列挙：
    - **W1**: Mindspace の mtime 更新と Conduit Pillar 呼び出し履歴（v0.2）が不整合（Nexus を介さない外部書き込みの疑い）
    - **W2**: Mindspace 配下に他 Mind 名のディレクトリ片（不可侵原則違反の物理的痕跡）
-   - **W3**: `.mind-meta.md` の `kind` が `runtime/kinds/` に存在しない（孤児 Mind）
+   - **W3**: `.mind-meta.md` の `kind` が Registry overlay (`$AI_ORG_OS_HOME/kinds/` + `templates/kinds/`、ADR-0020) のどちらにも存在しない（孤児 Mind）
    - **I1**: `stale` カテゴリへの遷移を v0.1 履歴と比較、新規発生分のみ通知
    - **I2**: inbox の蓄積（unread が一定閾値超）
 2. `observe.py --anomaly` で warning / info を別セクションに出力
@@ -424,8 +424,8 @@ ADR-0011 §4 で `runtime/pillars/` 配下は機械的に編集不可（CODEOWNE
 ### 観測データ源
 
 - [`runtime/pillars/conduit/storage.py`](../conduit/storage.py) — Dispatch storage、v0.2 で frontmatter を読む対象。Phase 5a-2 で Conduit Pillar に統合
-- `runtime/minds/<name>/.mind-meta.md` — Mind メタ、v0.3 で kind 整合を取る
-- `runtime/kinds/*.md` — Kind カタログ、v0.3 W3 で照合。Phase 5a-4 で Registry Pillar に統合
+- `$AI_ORG_OS_HOME/minds/<name>/.mind-meta.md` — Mind メタ、v0.3 で kind 整合を取る (ADR-0018)
+- `templates/kinds/*.md` + `$AI_ORG_OS_HOME/kinds/*.md` — Kind カタログ overlay (ADR-0020)、v0.3 W3 で照合
 
 ### 参考（流用しないが発想元）
 

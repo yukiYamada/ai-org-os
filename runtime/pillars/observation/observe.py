@@ -111,6 +111,10 @@ def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, st
     Phase 5b-4 (#81 / ADR-0018): Mindspace 配置は $AI_ORG_OS_HOME 配下。
     Only directories with .mind-meta.md count as real spawned Minds (the
     convention from spawn-mind.sh). Bare dirs are ignored.
+
+    Note (Phase 5c-1): MindObservation には guild フィールドが無いので
+    table 表示で guild を出す場合は呼び出し側で再度 .mind-meta.md を読む
+    (派生表示)。本関数は既存の出力契約を保つ。
     """
     result: list[tuple[MindObservation, str, str]] = []
     minds_dir = _minds_dir()
@@ -219,7 +223,7 @@ def _parse_int_option(argv: list[str], name: str, default: int) -> int:
 def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> str:
     """Realm 統合ビュー (Phase 5b-1 / #71)。
 
-    既存 snapshot 表 + Inbox queue + Conductor cycle status + 最新 Judgment を
+    既存 snapshot 表 + Inbox queue + Guild summary + Conductor cycle status を
     1 画面に並べる。各セクションは独立に失敗しても残りを描画する。
 
     Mind 0 件でも "=== Realm Observatory ===" ヘッダは出す
@@ -233,25 +237,95 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
         sections.append(_format_table(observations))
 
     # --- Inbox queue
+    # Codex P2 (#88): Inbox 読み込み失敗時は pending_list を None にする。
+    # Guild section が「pending=0」を全 Guild に表示する不整合 (Inbox
+    # unavailable なのに pending=0 が並ぶ) を避けるため、success/failure
+    # を pending_list の型で区別する (list = 成功 / None = 失敗 = unknown)。
+    pending_list: list | None = []
     try:
         sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "inbox"))
         from inbox import list_pending_issues  # type: ignore[import-not-found]
 
-        pending = list_pending_issues()
+        pending_list = list_pending_issues()
         sections.append("")
-        sections.append(f"=== Inbox Queue ({len(pending)} pending) ===")
-        if not pending:
+        sections.append(f"=== Inbox Queue ({len(pending_list)} pending) ===")
+        if not pending_list:
             sections.append("  (no pending issues)")
         else:
-            for rec in pending[:5]:
+            for rec in pending_list[:5]:
+                # Phase 5c-1: guild も表示 (どの組織への依頼か即わかるように)
                 sections.append(
-                    f"  {rec.issue_id}  {rec.priority:<3}  {rec.submitter:<12}  {rec.title}"
+                    f"  {rec.issue_id}  {rec.priority:<3}  "
+                    f"{rec.submitter:<12}  [{rec.guild}]  {rec.title}"
                 )
-            if len(pending) > 5:
-                sections.append(f"  ... and {len(pending) - 5} more")
+            if len(pending_list) > 5:
+                sections.append(f"  ... and {len(pending_list) - 5} more")
     except Exception as exc:  # noqa: BLE001
         sections.append("")
         sections.append(f"=== Inbox Queue (unavailable: {exc}) ===")
+        pending_list = None  # Codex P2 #88: 後続の Guild 集計に signal を渡す
+
+    # --- Guild summary (Phase 5c-1 / ADR-0019 / ADR-0020)
+    # default Guild は manifest 必須 (templates/guilds/default/ に同梱)。
+    # 利用者が $AI_ORG_OS_HOME/guilds/<name>/ に追加した Guild は overlay
+    # 経由で list_guilds() に含まれる。
+    # members は .mind-meta.md 走査による派生、pending は Inbox queue から集計。
+    try:
+        sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "registry"))
+        from guild import (  # type: ignore[import-not-found]
+            DEFAULT_GUILD,
+            enumerate_members,
+            list_guilds,
+        )
+
+        guild_names = list_guilds()
+        sections.append("")
+        if not guild_names:
+            sections.append("=== Guilds (no manifest) ===")
+            sections.append(
+                "  (no manifest in templates/guilds/ or $AI_ORG_OS_HOME/guilds/)"
+            )
+        else:
+            sections.append(f"=== Guilds ({len(guild_names)}) ===")
+            # Codex P2 (#88): Inbox 読み込みが失敗していたら (pending_list が
+            # None)、pending count は "?" として表示する。空 list と区別する
+            # ことで「Inbox unavailable なのに pending=0」の誤情報を避ける。
+            inbox_unknown = pending_list is None
+            pending_by_guild: dict[str, int] = {}
+            if not inbox_unknown:
+                for rec in pending_list:  # type: ignore[union-attr]
+                    g = rec.guild or DEFAULT_GUILD
+                    pending_by_guild[g] = pending_by_guild.get(g, 0) + 1
+            for gname in guild_names:
+                members = enumerate_members(gname)
+                member_str = ", ".join(members) if members else "(none)"
+                pending_str = (
+                    "?" if inbox_unknown
+                    else str(pending_by_guild.get(gname, 0))
+                )
+                sections.append(
+                    f"  {gname}: members={len(members)} [{member_str}], "
+                    f"pending={pending_str}"
+                )
+            if inbox_unknown:
+                # 「?」が並んでいる理由を 1 行で明示する
+                sections.append(
+                    "  (pending counts unknown: Inbox Queue read failed; "
+                    "see Inbox section above)"
+                )
+            else:
+                # manifest を持たないが Issue / Mind が参照している guild も併記
+                referenced_unknown = (
+                    set(pending_by_guild.keys()) - set(guild_names)
+                )
+                if referenced_unknown:
+                    for g in sorted(referenced_unknown):
+                        sections.append(
+                            f"  {g}: [no manifest] pending={pending_by_guild[g]}"
+                        )
+    except Exception as exc:  # noqa: BLE001
+        sections.append("")
+        sections.append(f"=== Guilds (unavailable: {exc}) ===")
 
     # --- Conductor status
     # Phase 5b-4 (#81 / ADR-0018): conductor-status.json は $AI_ORG_OS_HOME 直下。

@@ -139,6 +139,24 @@ if echo "${realm_out}" | grep -qE "Conductor"; then
 else
   assert "--realm: Conductor section" 0
 fi
+# Phase 5c-1 (ADR-0019): Guilds セクションが含まれ、default Guild の pending が
+# Inbox queue と整合していること。submit_issue は guild を指定していないので
+# default Guild に振り分けられている (pending=1)。
+if echo "${realm_out}" | grep -qE "=== Guilds"; then
+  assert "--realm: Guilds section" 1
+else
+  assert "--realm: Guilds section" 0
+fi
+if echo "${realm_out}" | grep -qE "default: members="; then
+  assert "--realm: default Guild listed" 1
+else
+  assert "--realm: default Guild listed" 0
+fi
+if echo "${realm_out}" | grep -qE "default: .* pending=1"; then
+  assert "--realm: default Guild pending=1 matches Inbox queue" 1
+else
+  assert "--realm: default Guild pending=1 matches Inbox queue" 0
+fi
 
 echo ""
 echo "[summary] passed: ${PASS}, failed: ${FAIL}"

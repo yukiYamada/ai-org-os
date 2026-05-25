@@ -73,17 +73,23 @@ Phase 5a 着手（Issue #35）で「Warden 機能を実装する Claude」をフ
 
 ### 3. ファイル配置の境界
 
+> **2026-05-25 更新 (Phase 5c-1 / ADR-0020)**: 本節の `runtime/kinds/`,
+> `runtime/personas/` は **撤回**。組織依存物は `templates/{kinds,personas}/`
+> (同梱) と `$AI_ORG_OS_HOME/{kinds,personas}/` (実体) の 2 layer overlay に
+> 移動した。`runtime/minds/` も ADR-0018 で `$AI_ORG_OS_HOME/minds/` に移動済。
+> 下記の図は本 ADR 当時のスナップショット (履歴) として残す。
+
 **コア vs 拡張の境界をファイル配置で明示**する：
 
 ```
 runtime/
-├── kinds/                  ← ユーザー定義（Mind 用、編集可）
+├── kinds/                  ← ユーザー定義（Mind 用、編集可） — ADR-0020 で templates/ + $AI_ORG_OS_HOME/ に移動
 │   └── generic.md
-├── personas/               ← ユーザー定義（Mind 用、編集可）
+├── personas/               ← ユーザー定義（Mind 用、編集可） — ADR-0020 で templates/ + $AI_ORG_OS_HOME/ に移動
 │   ├── designer.md
 │   ├── implementer.md
 │   └── reviewer.md
-├── minds/                  ← ユーザー生成（Mind の Mindspace、編集可）
+├── minds/                  ← ユーザー生成（Mind の Mindspace、編集可） — ADR-0018 で $AI_ORG_OS_HOME/minds/ に移動
 │   └── ...
 │
 ├── pillars/                ← ai-org-os core 提供（編集不可、新規）
