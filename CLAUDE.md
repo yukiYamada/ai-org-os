@@ -40,6 +40,11 @@ Realm（Docker container）の中に Warden（世界そのもの = Pillar 群）
 - 「これは ADR-0016 の Container / ホストどっち?」(コア / Mind)
 - 「これは ADR-0012 の人間責務 1〜5 どれ? それとも Warden / Mind の責務?」
 - 「これは ADR-0020 の **世界の構成自体 / 同梱テンプレ / 依存物の実体 / runtime state** どれ?」(`runtime/` / `templates/` / `$AI_ORG_OS_HOME/<category>/` / `$AI_ORG_OS_HOME/{minds,issues,...}`)
+- 「これは **A: axiom (機械強制) / B: 宣言的指示 (Persona) / C: 後天的依存注入 (manifest)** どれ?」(2026-05-25 operator 指摘、Phase 5c-2 着手前に ADR 化予定)
+  - A は **code 側で reject される**、違反は強制的にブロック (例: claim-only-own-guild)
+  - B は **文書、機械検証なし**、人間 / レビュー時に発覚 (例: reviewer.md の「リスクを必ず挙げる」)
+  - C は **利用者が書き換える構成**、違反概念が無い (例: Guild manifest の `personas: [...]` allowlist)
+  - **混同しやすい**: axiom.md に rule を書いたが enforce code が無い → "嘘の axiom"。Persona に「〜すべき」と書いたが Mind が守る保証は無い (機械強制でない)。manifest の allowlist は「ルールっぽいが構成」(別 repo で上書き自由)
 
 迷ったら **既存 ADR を読み直す**。新カテゴリが必要なら **新 ADR を起こす**。実装で踏み外す前に。
 
