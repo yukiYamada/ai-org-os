@@ -237,7 +237,11 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
         sections.append(_format_table(observations))
 
     # --- Inbox queue
-    pending_list: list = []
+    # Codex P2 (#88): Inbox 読み込み失敗時は pending_list を None にする。
+    # Guild section が「pending=0」を全 Guild に表示する不整合 (Inbox
+    # unavailable なのに pending=0 が並ぶ) を避けるため、success/failure
+    # を pending_list の型で区別する (list = 成功 / None = 失敗 = unknown)。
+    pending_list: list | None = []
     try:
         sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "inbox"))
         from inbox import list_pending_issues  # type: ignore[import-not-found]
@@ -259,6 +263,7 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
     except Exception as exc:  # noqa: BLE001
         sections.append("")
         sections.append(f"=== Inbox Queue (unavailable: {exc}) ===")
+        pending_list = None  # Codex P2 #88: 後続の Guild 集計に signal を渡す
 
     # --- Guild summary (Phase 5c-1 / ADR-0019 / ADR-0020)
     # default Guild は manifest 必須 (templates/guilds/default/ に同梱)。
@@ -282,28 +287,42 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
             )
         else:
             sections.append(f"=== Guilds ({len(guild_names)}) ===")
-            # pending count を guild ごとに集計
+            # Codex P2 (#88): Inbox 読み込みが失敗していたら (pending_list が
+            # None)、pending count は "?" として表示する。空 list と区別する
+            # ことで「Inbox unavailable なのに pending=0」の誤情報を避ける。
+            inbox_unknown = pending_list is None
             pending_by_guild: dict[str, int] = {}
-            for rec in pending_list:
-                g = rec.guild or DEFAULT_GUILD
-                pending_by_guild[g] = pending_by_guild.get(g, 0) + 1
+            if not inbox_unknown:
+                for rec in pending_list:  # type: ignore[union-attr]
+                    g = rec.guild or DEFAULT_GUILD
+                    pending_by_guild[g] = pending_by_guild.get(g, 0) + 1
             for gname in guild_names:
                 members = enumerate_members(gname)
                 member_str = ", ".join(members) if members else "(none)"
-                pending = pending_by_guild.get(gname, 0)
+                pending_str = (
+                    "?" if inbox_unknown
+                    else str(pending_by_guild.get(gname, 0))
+                )
                 sections.append(
                     f"  {gname}: members={len(members)} [{member_str}], "
-                    f"pending={pending}"
+                    f"pending={pending_str}"
                 )
-            # manifest を持たないが Issue / Mind が参照している guild も併記
-            referenced_unknown = (
-                set(pending_by_guild.keys()) - set(guild_names)
-            )
-            if referenced_unknown:
-                for g in sorted(referenced_unknown):
-                    sections.append(
-                        f"  {g}: [no manifest] pending={pending_by_guild[g]}"
-                    )
+            if inbox_unknown:
+                # 「?」が並んでいる理由を 1 行で明示する
+                sections.append(
+                    "  (pending counts unknown: Inbox Queue read failed; "
+                    "see Inbox section above)"
+                )
+            else:
+                # manifest を持たないが Issue / Mind が参照している guild も併記
+                referenced_unknown = (
+                    set(pending_by_guild.keys()) - set(guild_names)
+                )
+                if referenced_unknown:
+                    for g in sorted(referenced_unknown):
+                        sections.append(
+                            f"  {g}: [no manifest] pending={pending_by_guild[g]}"
+                        )
     except Exception as exc:  # noqa: BLE001
         sections.append("")
         sections.append(f"=== Guilds (unavailable: {exc}) ===")
