@@ -152,6 +152,26 @@ class TestClaimIssueGuildAxiom(unittest.TestCase):
         self.assertFalse(out.get("ok"), out)
         self.assertEqual(out.get("code"), "not_found")
 
+    def test_path_traversal_in_mind_name_rejected(self) -> None:
+        """Codex P2 (#88): unbound Nexus (assert_identity が no-op の状況) でも
+        crafted mind_name ('../...' 等) は guild lookup に到達する前に format
+        検証で reject される。これにより minds/ 外の .mind-meta.md を読みに
+        いく path traversal の窓を塞ぐ。
+        """
+        _submit_issue(self.home, "for-anyone", guild="default")
+        # 不正な mind_name (path traversal を試みる)。
+        # 既存の inbox を peek すらせず、validation 段階で fail するはず。
+        for bad in ["../escape", "has space", "x" * 65, "a/b", ""]:
+            out = self._call(
+                "claim_issue",
+                {"mind_name": bad, "issue_id": "20260524T120000Z-000000-deadbeef"},
+            )
+            self.assertFalse(out.get("ok"), f"mind_name={bad!r} should be rejected, got {out}")
+            # storage._validate_mind_name の ValueError は call_tool の
+            # `except ValueError` で {"ok": False, "error": ...} になる。
+            # code は invalid_input / forbidden のいずれかではなく無印 (string).
+            self.assertIn("mind_name", out.get("error", ""))
+
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
 class TestReadPendingIssues(unittest.TestCase):

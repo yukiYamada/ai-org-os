@@ -32,7 +32,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from storage import AuthorizationError, Nexus
+from storage import AuthorizationError, Nexus, _validate_mind_name
 
 # Phase 5b-2 (#75): Inbox Pillar への cross-pillar import。
 # ADR-0017 §5「Mind 側に Inbox 取り込み経路を提供」のために、Conduit Pillar が
@@ -190,12 +190,18 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                 ],
             }
         elif name == "claim_issue":
-            # Phase 5b-2: mind_name は identity binding でチェック済。
+            # Phase 5b-2: mind_name は identity binding でチェック済 (bound 時のみ)。
             # claimed_by として archive に書き込まれる (ADR-0017 §1 traceability)。
             # Phase 5c-1 (#87 / ADR-0019): Guild mismatch を機械 reject する。
             mind_name = args["mind_name"]
             issue_id = args["issue_id"]
-            _nexus.assert_identity(mind_name)  # ADR-0008 enforcement
+            # Codex P2 (#88): _nexus.assert_identity は unbound 時 (テスト /
+            # manual モード) は no-op なので、crafted mind_name ('../...' 等)
+            # を guild lookup (`_get_mind_guild`) に渡すと minds/ 外の
+            # .mind-meta.md を読む path traversal の窓が空く。assert_identity
+            # の前に明示的な format 検証を入れる (storage.py と同じ regex)。
+            _validate_mind_name(mind_name, "mind_name")
+            _nexus.assert_identity(mind_name)  # ADR-0008 enforcement (no-op if unbound)
 
             # peek → guild compare → atomic claim、の順。peek と claim の間に
             # 他 Mind が claim する race は残るが、その場合 _inbox_claim_issue
