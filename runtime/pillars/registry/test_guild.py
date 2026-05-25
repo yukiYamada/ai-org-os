@@ -332,29 +332,27 @@ class TestGetMindGuild(unittest.TestCase):
             _write_mind_meta(minds, "m1", guild="backend")
             self.assertEqual(get_mind_guild("m1", registry_dir=minds), "backend")
 
-    def test_missing_meta_defaults_to_default(self) -> None:
+    def test_missing_registry_entry_returns_none(self) -> None:
+        """Codex P1 (#91 2 回目): registry エントリ無は None。default に
+        fallback すると Guild 隔離が破れる (default Guildmaster による越境観察
+        が通ってしまう)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
-            self.assertEqual(
-                get_mind_guild("ghost", registry_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("ghost", registry_dir=minds))
 
-    def test_meta_without_guild_field_defaults(self) -> None:
-        # Phase 5c-1 以前に生成された Mind との後方互換
+    def test_registry_without_guild_field_returns_none(self) -> None:
+        """registry エントリは在るが guild フィールド無は None。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "old", guild=None)
-            self.assertEqual(
-                get_mind_guild("old", registry_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("old", registry_dir=minds))
 
-    def test_meta_with_empty_guild_defaults(self) -> None:
+    def test_registry_with_empty_guild_returns_none(self) -> None:
+        """空文字列も None 扱い (= 未設定と同じ、forbidden の入口に揃える)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "m1", guild="")
-            self.assertEqual(
-                get_mind_guild("m1", registry_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("m1", registry_dir=minds))
 
 
 class TestEnumerateMembers(unittest.TestCase):
@@ -390,13 +388,14 @@ class TestEnumerateMembers(unittest.TestCase):
                 enumerate_members("default", registry_dir=minds), ["real"]
             )
 
-    def test_meta_without_guild_field_counted_as_default(self) -> None:
-        # 旧 Mind は guild: フィールドが無くても default Guild の member。
+    def test_registry_without_guild_field_not_counted(self) -> None:
+        """Codex P1 (#91 2 回目): guild フィールド欠落の entry は default に
+        勝手に分類しない。member 集計からも除外する (越境観察の入口を塞ぐ)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "old", guild=None)
             self.assertEqual(
-                enumerate_members("default", registry_dir=minds), ["old"]
+                enumerate_members("default", registry_dir=minds), []
             )
 
 

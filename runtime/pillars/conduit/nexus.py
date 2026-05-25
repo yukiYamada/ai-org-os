@@ -250,9 +250,28 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                     # Codex P1 (#91): Guildmaster であっても **異 Guild** の Mind
                     # を監視するのは axiom 違反 (Guild 隔離と claim-only-own-guild の
                     # 思想で同じ責任分界)。same-guild check を入れる。
-                    requester_guild = _get_mind_guild(mind_name) or DEFAULT_GUILD
-                    target_guild = _get_mind_guild(target_mind) or DEFAULT_GUILD
-                    if requester_guild != target_guild:
+                    # Codex P1 (#91 2 回目): registry エントリ無の Mind は
+                    # unknown として forbidden。default fallback は cross-guild
+                    # bypass の窓だった (default guildmaster が registry 無 target
+                    # を観察できてしまう)。
+                    requester_guild = _get_mind_guild(mind_name)
+                    target_guild = _get_mind_guild(target_mind)
+                    if requester_guild is None or target_guild is None:
+                        result = {
+                            "ok": False,
+                            "code": "forbidden",
+                            "error": (
+                                f"forbidden: requester or target mind has no "
+                                f"registry entry. requester='{mind_name}' "
+                                f"(guild={requester_guild!r}), target="
+                                f"'{target_mind}' (guild={target_guild!r}). "
+                                f"both must be registered (axiom: "
+                                f"read-others-inbox-only-by-guildmaster)"
+                            ),
+                            "requester_guild": requester_guild,
+                            "target_guild": target_guild,
+                        }
+                    elif requester_guild != target_guild:
                         result = {
                             "ok": False,
                             "code": "forbidden",
@@ -323,8 +342,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
             # 後段で潰れる ≈ FIFO で並んでいた他 Mind の claim が勝つ)。
             issue_rec = _inbox_peek(issue_id)
             issue_guild = issue_rec.guild or DEFAULT_GUILD
-            mind_guild = _get_mind_guild(mind_name) or DEFAULT_GUILD
-            if mind_guild != issue_guild:
+            mind_guild = _get_mind_guild(mind_name)
+            # Codex P1 (#91 2 回目): registry エントリ無の Mind は unknown
+            # として forbidden (旧: DEFAULT_GUILD に fallback → cross-guild
+            # bypass の窓だった)。
+            if mind_guild is None:
+                result = {
+                    "ok": False,
+                    "code": "forbidden",
+                    "error": (
+                        f"forbidden: mind '{mind_name}' has no registry entry "
+                        f"(unknown guild). spawn-mind must register the Mind "
+                        f"before any axiom-controlled operation."
+                    ),
+                    "mind_guild": None,
+                    "issue_guild": issue_guild,
+                }
+            elif mind_guild != issue_guild:
                 # ADR-0019 §3 axiom: claim-only-own-guild。
                 # storage.AuthorizationError と同じ "forbidden" コードに揃え、
                 # Mind 側 (Persona) が同じ handler で扱えるようにする。
@@ -387,15 +421,25 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                 }
             else:
                 # 発令者の guild を解決 → 同 guild に spawn する (cross-guild
-                # spawn は v0.1 で許可しない、ADR-0019 §3 と整合)
-                requester_guild = _get_mind_guild(mind_name) or DEFAULT_GUILD
-                # spawn-mind.sh を subprocess で呼ぶ。args list なので shell
-                # injection は構造的に不可。
+                # spawn は v0.1 で許可しない、ADR-0019 §3 と整合)。
+                # _is_guildmaster が True を返している = registry エントリは
+                # 存在する。なので requester_guild も None ではないはず。
+                # defense in depth: 万一 None なら internal_error。
+                requester_guild = _get_mind_guild(mind_name)
                 import subprocess  # noqa: PLC0415
                 spawn_sh = (
                     _RUNTIME_DIR / "pillars" / "lifecycle" / "spawn-mind.sh"
                 )
-                if not spawn_sh.is_file():
+                if requester_guild is None:
+                    result = {
+                        "ok": False,
+                        "code": "internal_error",
+                        "error": (
+                            f"requester '{mind_name}' has persona=guildmaster "
+                            f"but no guild field; registry entry is malformed"
+                        ),
+                    }
+                elif not spawn_sh.is_file():
                     result = {
                         "ok": False,
                         "error": f"spawn-mind.sh not found at {spawn_sh}",

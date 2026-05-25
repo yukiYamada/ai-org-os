@@ -392,23 +392,31 @@ def get_mind_guild(
     minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
     *,
     registry_dir: Path | None = None,
-) -> str:
-    """Mind の所属 Guild を **Mind registry** から読む (Phase 5c-2 P1 fix)。
+) -> str | None:
+    """Mind の所属 Guild を **Mind registry** から読む。
 
-    registry エントリが存在しない / `guild:` フィールドが無い場合は
-    `DEFAULT_GUILD` を返す (後方互換: Phase 5c-1 以前の Mind / 移行中の Mind
-    は default 扱い)。
+    Phase 5c-2 P1 fix (#91 Codex 2 回目): registry エントリが存在しない /
+    `guild:` フィールドが無い場合は **None** を返す。
+
+    以前は `DEFAULT_GUILD` を fallback していたが、これは「過渡期 Mind /
+    pre-migration Mind を default に勝手に分類する」挙動で、攻撃面になっていた:
+      - default の Guildmaster が registry 無 target の inbox を読める
+        (target も default と判定されて cross-guild check が通る)
+      - 非 default の Mind が「registry 無」だと自 Guild の Issue を claim
+        できなくなる、または他 Guild の Issue を誤って claim できる
+    None を返すことで、caller (axiom 強制ロジック) が「unknown mind =
+    forbidden」と明示判定できる。
 
     旧 API の `minds_dir` 引数は互換のため残すが本関数では参照しない。
     `.mind-meta.md` (Mindspace 内) は Mind が書き換え可能なため authoritative
-    source としては使わない (Codex P1 #91 fix)。
+    source としては使わない (Codex P1 #91 1 回目)。
 
     例外: 形式違反の mind_name は呼び出し側で拒否済の想定 (Nexus の identity
     binding 等)。本関数はファイル read 失敗を例外化しない。
     """
     reg_path = _registry_path_for(mind_name, registry_dir)
     value = _read_mind_meta_field(reg_path, "guild")
-    return value if value else DEFAULT_GUILD
+    return value if value else None
 
 
 def get_mind_persona(
@@ -507,8 +515,11 @@ def enumerate_members(
             continue
         if not GUILD_NAME_RE.match(entry.stem):
             continue
-        g = _read_mind_meta_field(entry, "guild") or DEFAULT_GUILD
-        if g == guild_name:
+        # Phase 5c-2 P1 fix (#91): guild フィールドが無い registry entry は
+        # 「unknown mind」として skip。default に fallback して member 集計しない
+        # (default Guildmaster の越境観察を防ぐため)。
+        g = _read_mind_meta_field(entry, "guild")
+        if g is not None and g == guild_name:
             members.append(entry.stem)
     return members
 

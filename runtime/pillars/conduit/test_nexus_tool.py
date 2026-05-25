@@ -151,17 +151,26 @@ class TestClaimIssueGuildAxiom(unittest.TestCase):
         self.assertTrue(out2.get("ok"), out2)
         self.assertEqual(out2.get("claimed_by"), "bob")
 
-    def test_legacy_mind_without_guild_field_treated_as_default(self) -> None:
-        """guild フィールド無し (Phase 5c-1 以前の Mind) は default 扱い。"""
+    def test_legacy_mind_without_registry_entry_is_forbidden(self) -> None:
+        """Codex P1 (#91 2 回目) で仕様変更: Phase 5c-2 以前に spawn された
+        Mind (registry エントリ無) は axiom-controlled な操作 (claim_issue 等)
+        で forbidden。default fallback すると default Guildmaster が registry
+        無 Mind を観察できる cross-guild bypass の窓になるため、明示的に
+        unknown 扱い。利用者は対象 Mind を kill して再 spawn する。
+        """
+        # Mindspace 内 .mind-meta.md だけある古い Mind (registry 無)
         d = self.home / "minds" / "legacy"
         d.mkdir(parents=True, exist_ok=True)
         (d / ".mind-meta.md").write_text(
-            "---\nmind_name: legacy\nkind: generic\npersona: designer\n---\n",
+            "---\nmind_name: legacy\nkind: generic\npersona: designer\n"
+            "guild: default\n---\n",
             encoding="utf-8",
         )
         iid = _submit_issue(self.home, "default-issue", guild="default")
         out = self._call("claim_issue", {"mind_name": "legacy", "issue_id": iid})
-        self.assertTrue(out.get("ok"), out)
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertIn("registry", out.get("error", "").lower())
 
     def test_unknown_issue_returns_not_found(self) -> None:
         _write_mind_meta(self.home, "alice", guild="default")
@@ -482,6 +491,46 @@ class TestRegistryAuthoritativeNotMindspace(unittest.TestCase):
         self.assertEqual(out.get("code"), "forbidden")
         # registry を見ているので persona は designer のまま見える
         self.assertEqual(out.get("requester_persona"), "designer")
+
+    def test_missing_registry_entry_blocks_claim_issue(self) -> None:
+        """Codex P1 (#91 2 回目): registry エントリ無の Mind は claim_issue で
+        forbidden。default fallback すると Guild 隔離が破れるので、明示的に
+        unknown 扱い。"""
+        ms = self.home / "minds" / "old-mind"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / ".mind-meta.md").write_text(
+            "---\nmind_name: old-mind\nkind: generic\npersona: designer\n"
+            "guild: default\n---\n",
+            encoding="utf-8",
+        )
+        iid = _submit_issue(self.home, "for-anyone", guild="default")
+        out = self._call(
+            "claim_issue", {"mind_name": "old-mind", "issue_id": iid},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertIsNone(out.get("mind_guild"))
+        self.assertIn("registry", out.get("error", "").lower())
+
+    def test_missing_registry_entry_blocks_cross_inbox_read(self) -> None:
+        """default guildmaster が registry 無 target を観察してしまう穴 (Codex
+        P1 #91 2 回目) を塞ぐ: target_guild が None なら forbidden。"""
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        ms = self.home / "minds" / "ghost-backend"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / ".mind-meta.md").write_text(
+            "---\nmind_name: ghost-backend\nkind: generic\n"
+            "persona: implementer\nguild: backend\n---\n",
+            encoding="utf-8",
+        )
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "gm", "target_mind": "ghost-backend"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertIsNone(out.get("target_guild"))
+        self.assertIn("registry", out.get("error", "").lower())
 
     def test_forged_mindspace_persona_cannot_bypass_read_inbox_axiom(self) -> None:
         """同上を read_inbox 経路でも検証 (target_mind 指定して他者観察)。"""
