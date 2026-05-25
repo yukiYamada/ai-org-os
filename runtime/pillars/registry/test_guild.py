@@ -243,6 +243,36 @@ class TestListGuilds(unittest.TestCase):
             )
             self.assertEqual(list_guilds(base), ["good"])
 
+    def test_excludes_malformed_manifest(self) -> None:
+        """Codex P2 (#88): parse 不能な manifest を持つ Guild は listing から除外。
+
+        理由: list_guilds が「manifest.md がある」だけで listed すると、
+        観察者 (observe.py --realm / CLI list) には Guild が見える一方
+        spawn-mind / claim_issue は load_manifest で fail する。この不整合は
+        利用者を「Guild は在るはずなのに使えない」と困らせるので、parse まで
+        含めて検証して見えない化する。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _write_manifest(base, "ok")
+            # schema_version 違反の manifest を持つ Guild
+            bad_dir = base / "bad"
+            bad_dir.mkdir()
+            (bad_dir / "manifest.md").write_text(
+                "---\nguild: bad\nschema_version: 9.9\n"
+                "kinds: [generic]\npersonas: [designer]\n---\n",
+                encoding="utf-8",
+            )
+            # 必須フィールド欠落の manifest を持つ Guild
+            broken_dir = base / "broken"
+            broken_dir.mkdir()
+            (broken_dir / "manifest.md").write_text(
+                "---\nguild: broken\nschema_version: 0.1\n"
+                "kinds: [generic]\n---\n",  # personas 欠落
+                encoding="utf-8",
+            )
+            self.assertEqual(list_guilds(base), ["ok"])
+
 
 class TestValidateMembership(unittest.TestCase):
     def test_happy_path(self) -> None:
@@ -429,6 +459,33 @@ class TestOverlayResolution(unittest.TestCase):
             str(self.home).replace("\\", "/"),
             str(m.path).replace("\\", "/"),
         )
+
+    def test_malformed_home_manifest_shadows_templates(self) -> None:
+        """Codex P2 (#88): home の同名 manifest が malformed なら templates の
+        同名 (parse 可) でも listing / load_manifest にフォールバックさせない。
+
+        registry.list_kinds と同じ shadow consistency。
+        """
+        # home に default を malformed で再定義 (schema_version 違反)
+        home_default = self.home / "guilds" / "default"
+        home_default.mkdir(parents=True)
+        (home_default / "manifest.md").write_text(
+            "---\nguild: default\nschema_version: 9.9\n"
+            "kinds: [generic]\npersonas: [designer]\n---\n",
+            encoding="utf-8",
+        )
+        # list_guilds は default を含まない (home が shadow、templates も見ない)
+        names = list_guilds()
+        self.assertNotIn(
+            "default", names,
+            "home の malformed manifest が templates をマスクすべき "
+            "(shadow 原則、Codex P2 #88)",
+        )
+        # load_manifest は home の壊れた manifest を返す (= shadow consistency:
+        # list に出ない && load も fail という両立、利用者には「home の default
+        # を直せ」のシグナルとして一貫)
+        with self.assertRaises(GuildValidationError):
+            load_manifest("default")
 
     def test_home_only_guild_visible_via_list(self) -> None:
         """home にだけ存在する Guild も list_guilds に出る。"""

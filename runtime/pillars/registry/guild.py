@@ -240,25 +240,54 @@ def load_manifest(
 
 
 def list_guilds(guilds_dir: Path | None = None) -> list[str]:
-    """登録済み Guild 名の和集合を返す (Phase 5c-1 / ADR-0020 で overlay 化)。
+    """登録済み Guild 名を返す (Phase 5c-1 / ADR-0020 で overlay 化)。
 
     home (`$AI_ORG_OS_HOME/guilds/`) と templates (`templates/guilds/`) の
-    両方をスキャンして manifest.md を持つ dir 名を集める。同名は片方にあれば
-    1 件として扱う (実体が templates を覆い隠す形)。
+    両方をスキャンして manifest.md を持つ dir 名を集める。同名は home が
+    templates をマスクする (実体 overlay 原則)。
 
-    手書きで作ったが manifest が無いディレクトリは無視する。
+    Codex P2 (#88): manifest が **parse 可能** な dir のみ listing する。
+    higher-priority source の manifest が malformed (schema_version 違反 /
+    必須フィールド欠落 / guild フィールド不一致 等) の場合:
+      1. その Guild を listing から **除外** する
+      2. lower-priority source の同名にも **フォールバックさせない** (shadow)
+      3. stderr に WARN を出して configuration error を可視化
+    こうしないと `list` には現れるが `load_manifest` / `validate_membership`
+    で fail する不整合 (= spawn / claim が「Guild は在るのに動かない」と
+    なる) が起きる。registry.list_kinds と同じ shadowing 原則。
+
+    手書きで作ったが manifest.md が無いディレクトリは無視する。
     """
     seen: set[str] = set()
+    shadowed: set[str] = set()
     for source in _search_dirs(guilds_dir):
         if not source.is_dir():
             continue
+        local_dirs: set[str] = set()
         for entry in sorted(source.iterdir()):
             if not entry.is_dir():
                 continue
             if not GUILD_NAME_RE.match(entry.name):
                 continue
-            if (entry / "manifest.md").is_file():
-                seen.add(entry.name)
+            if not (entry / "manifest.md").is_file():
+                continue
+            local_dirs.add(entry.name)
+            if entry.name in shadowed or entry.name in seen:
+                # higher-priority source に同名 dir が在った (malformed 含む)
+                # → 下位 source の同名は shadow される
+                continue
+            # parse まで含めて検証。malformed なら listing から除外 + shadow。
+            try:
+                load_manifest(entry.name, guilds_dir=source)
+            except (GuildNotFoundError, GuildValidationError) as exc:
+                print(
+                    f"[WARN] guild '{entry.name}' manifest at {entry} is "
+                    f"malformed, hiding from listing: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            seen.add(entry.name)
+        shadowed |= local_dirs
     return sorted(seen)
 
 
