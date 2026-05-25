@@ -206,6 +206,27 @@ if [ "${START_LOOP}" = "1" ]; then
   fi
 fi
 
+# Phase 5c-1 (#88 Codex P2): Kind の registration を Registry Pillar で再検証。
+# resolve_overlay_md は file 存在のみで通すため、home overlay (例:
+# $AI_ORG_OS_HOME/kinds/<KIND>.md) が parse 不能でも spawn が進んでしまう。
+# 一方 registry.py check は overlay shadow consistency を強制するので、
+# 「Registry says unregistered なのに spawn は通る」不整合が起きる。
+# spawn 前に registry.py check で parse まで含めた検証を行う。
+REGISTRY_PY="${RUNTIME_DIR}/pillars/registry/registry.py"
+if [ ! -f "${REGISTRY_PY}" ]; then
+  echo "[ERROR] registry.py not found at ${REGISTRY_PY}" >&2
+  echo "[HINT] Phase 5a-4 implementation may be incomplete; please reinstall ai-org-os." >&2
+  exit 10
+fi
+echo "[spawn-mind] Verifying Kind registration via Registry Pillar: ${KIND}"
+if ! "${HOST_PYTHON_BIN}" "${REGISTRY_PY}" check "${KIND}"; then
+  echo "[ERROR] Kind '${KIND}' is not registered (or its overlay file is malformed)." >&2
+  echo "[HINT] List registered Kinds: ${HOST_PYTHON_BIN} ${REGISTRY_PY} list" >&2
+  echo "[HINT] Inspect Kind:           ${HOST_PYTHON_BIN} ${REGISTRY_PY} get ${KIND}" >&2
+  echo "[HINT] If you edited \$AI_ORG_OS_HOME/kinds/${KIND}.md, verify its frontmatter." >&2
+  exit 2
+fi
+
 # Phase 5c-1 (#87 / ADR-0019): Guild membership 検証。
 # 指定 Guild の manifest.md に kind / persona が含まれていなければ spawn を拒否。
 # guild.py は Registry Pillar 配下にあり、framework のみ参照 (mutable state を読まない)。

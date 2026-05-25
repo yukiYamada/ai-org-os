@@ -326,6 +326,30 @@ code=$?
 set -e
 assert_exit_code "empty guild" 6 "${code}"
 
+echo "[case] 14. malformed home Kind は Registry 経由で exit 2 (Codex P2 #88)"
+# 利用者が $AI_ORG_OS_HOME/kinds/generic.md を frontmatter 壊して
+# 上書きしたケース。resolve_overlay_md は file 存在で通すが registry.py check は
+# parse 不能を捉えて exit 1 を返し、spawn-mind は exit 2 で fail する。
+mind_bad_kind="${TEST_ID}-bad-kind"
+mkdir -p "${AI_ORG_OS_HOME}/kinds"
+echo "no frontmatter here" > "${AI_ORG_OS_HOME}/kinds/generic.md"
+set +e
+"${SPAWN}" generic designer "${mind_bad_kind}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "malformed home kind rejected by Registry" 2 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_bad_kind}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("malformed home kind: Mindspace should not be created")
+  echo "  [NG]   malformed home kind: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   malformed home kind: no Mindspace leaked"
+fi
+# fixture を片付けて以降のテストに影響しないように
+rm -f "${AI_ORG_OS_HOME}/kinds/generic.md"
+rmdir "${AI_ORG_OS_HOME}/kinds" 2>/dev/null || true
+
 echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
 # --start-loop は spawn 時点で claude バイナリを事前検証する。
 # claude を definitely-not-a-real-binary に差し替え、--start-loop で exit 8 が返ることを検証。
