@@ -83,6 +83,8 @@ SUBMITTER="${ARGS[3]:-human}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INBOX_PY="${SCRIPT_DIR}/inbox.py"
+RUNTIME_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+GUILD_PY="${RUNTIME_DIR}/pillars/registry/guild.py"
 
 if [ ! -f "${INBOX_PY}" ]; then
   echo "[ERROR] inbox.py not found at ${INBOX_PY}" >&2
@@ -99,6 +101,24 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
     echo "[HINT] Install Python 3.10+, or set AI_ORG_OS_PYTHON to your python path." >&2
     exit 3
   fi
+fi
+
+# Phase 5c-1 (#88 Codex P2): Guild manifest 存在チェック。
+# spawn-mind / claim_issue は Guild の exact match を強制するので、
+# 投入時に typo (--guild backned 等) が通ると「どの Mind にも claim できない
+# 孤児 Issue」が inbox に溜まる。submit 側で Guild の parse 可能性を確認する。
+# guild.py show は exit 3=GuildNotFound / exit 4=GuildValidationError を返す。
+if [ -f "${GUILD_PY}" ]; then
+  if ! "${PYTHON_BIN}" "${GUILD_PY}" show "${GUILD}" >/dev/null 2>&1; then
+    echo "[ERROR] Guild '${GUILD}' does not exist or its manifest is malformed." >&2
+    echo "[HINT] List available guilds: ${PYTHON_BIN} ${GUILD_PY} list" >&2
+    echo "[HINT] Inspect manifest:      ${PYTHON_BIN} ${GUILD_PY} show ${GUILD}" >&2
+    exit 4
+  fi
+else
+  # guild.py が無いビルドでは Guild validation を skip。inbox.py 側の
+  # 形式チェックには通す。本来 v0.1 では guild.py は必ず存在する想定 (warn のみ)。
+  echo "[WARN] guild.py not found at ${GUILD_PY}; skipping Guild existence check." >&2
 fi
 
 # Issue 投入。inbox.py は成功時 stdout に issue_id を出力する。
