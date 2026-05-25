@@ -247,16 +247,38 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                         "requester_persona": requester_persona,
                     }
                 else:
-                    # Guildmaster なら target_mind の inbox を読む。
-                    # storage.Nexus._authorize は self.identity と target_mind を
-                    # 比較するので、bound 状態だと self-bound でない限り失敗する。
-                    # 同 storage_dir で identity 無効化した一時インスタンスを使う。
-                    from storage import Nexus as _NexusCls  # noqa: PLC0415
-                    unbound = _NexusCls(
-                        storage_dir=_nexus.storage_dir, identity=None,
-                    )
-                    result = unbound.read_inbox(mind_name=target_mind)
-                    result["observed_by"] = mind_name  # audit 用
+                    # Codex P1 (#91): Guildmaster であっても **異 Guild** の Mind
+                    # を監視するのは axiom 違反 (Guild 隔離と claim-only-own-guild の
+                    # 思想で同じ責任分界)。same-guild check を入れる。
+                    requester_guild = _get_mind_guild(mind_name) or DEFAULT_GUILD
+                    target_guild = _get_mind_guild(target_mind) or DEFAULT_GUILD
+                    if requester_guild != target_guild:
+                        result = {
+                            "ok": False,
+                            "code": "forbidden",
+                            "error": (
+                                f"forbidden: guildmaster '{mind_name}' belongs "
+                                f"to guild '{requester_guild}' but target "
+                                f"'{target_mind}' belongs to guild "
+                                f"'{target_guild}'. cross-guild observation is "
+                                f"not permitted (axiom: "
+                                f"read-others-inbox-only-by-guildmaster, "
+                                f"same-guild boundary)"
+                            ),
+                            "requester_guild": requester_guild,
+                            "target_guild": target_guild,
+                        }
+                    else:
+                        # Guildmaster かつ同 Guild なら target_mind の inbox を読む。
+                        # storage.Nexus._authorize は self.identity と target_mind を
+                        # 比較するので、bound 状態だと self-bound でない限り失敗する。
+                        # 同 storage_dir で identity 無効化した一時インスタンスを使う。
+                        from storage import Nexus as _NexusCls  # noqa: PLC0415
+                        unbound = _NexusCls(
+                            storage_dir=_nexus.storage_dir, identity=None,
+                        )
+                        result = unbound.read_inbox(mind_name=target_mind)
+                        result["observed_by"] = mind_name  # audit 用
         elif name == "ack_dispatch":
             result = _nexus.ack_dispatch(mind_name=args["mind_name"], msg_id=args["msg_id"])
         elif name == "read_pending_issues":

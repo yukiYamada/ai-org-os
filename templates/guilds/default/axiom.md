@@ -13,10 +13,14 @@ axioms:
     enforcement: mechanical
     enforced_by: runtime/pillars/conduit/nexus.py (spawn_mind)
   - id: read-others-inbox-only-by-guildmaster
-    rule: 他 Mind の Dispatch inbox を読めるのは persona=guildmaster の Mind のみ
+    rule: 他 Mind の Dispatch inbox を読めるのは「自分と同じ Guild に所属する persona=guildmaster の Mind」のみ
     category: 監視 (observation)
     enforcement: mechanical
     enforced_by: runtime/pillars/conduit/nexus.py (read_inbox, target_mind 指定時)
+    note: |
+      Guildmaster であっても自 Guild の外の Mind は監視できない (Codex P1 #91)。
+      claim-only-own-guild と同じ Guild 隔離の思想。Phase 5c-2 で導入時に
+      同 Guild 境界チェックを追加。
 ---
 
 # Axioms for Guild: default
@@ -50,11 +54,15 @@ ADR-0021 で定義した通り、Guild axiom は **inter-Mind 関係の「指示
 
 ### `read-others-inbox-only-by-guildmaster` (監視) — Phase 5c-2
 
-**ルール**: 自分以外の Mind の Dispatch inbox を読めるのは **persona が `guildmaster` の Mind のみ**。自分の inbox を読むのは誰でも可 (= 既存の identity binding のみで OK)。
+**ルール**: 自分以外の Mind の Dispatch inbox を読めるのは **自分と同じ Guild に所属する persona=`guildmaster` の Mind のみ**。自分の inbox を読むのは誰でも可 (= 既存の identity binding のみで OK)。
 
-**Why**: 配下 Mind の沈黙 / 詰まりを観察できないと運営層が機能しない。一方で全 Mind が互いを覗ける状態は組織として健全でない (= プライバシーと責任分担)。Guildmaster だけが「監視」の権限を持つ (ADR-0021 「監視の可否」)。
+**Why**: 配下 Mind の沈黙 / 詰まりを観察できないと運営層が機能しない。一方で全 Mind が互いを覗ける状態は組織として健全でない (= プライバシーと責任分担)。**さらに Guildmaster であっても自 Guild の外の Mind は監視できない** — claim-only-own-guild と同じ Guild 隔離の思想で、Guildmaster は自 Guild の運営層であって全 Realm の監視者ではない (Codex P1 #91、Phase 5c-2 で boundary 追加)。
 
-**Enforcement**: `runtime/pillars/conduit/nexus.py` の `read_inbox` MCP tool が、`target_mind` が `mind_name` と異なる場合に発令 Mind の persona をチェック。`guildmaster` でなければ `code: forbidden`。
+**Enforcement**: `runtime/pillars/conduit/nexus.py` の `read_inbox` MCP tool が、`target_mind` が `mind_name` と異なる場合に 2 段階チェック:
+1. 発令 Mind の persona が `guildmaster` か (persona check)
+2. 発令 Mind と target Mind が同じ Guild か (same-guild boundary)
+
+どちらかが満たされなければ `code: forbidden`。
 
 ## 違反時の挙動
 

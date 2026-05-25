@@ -298,6 +298,29 @@ class TestReadInboxGuildmasterAxiom(unittest.TestCase):
         self.assertFalse(out.get("ok"), out)
         self.assertIn("target_mind", out.get("error", ""))
 
+    def test_cross_guild_observation_forbidden_even_for_guildmaster(self) -> None:
+        """Codex P1 (#91): Guildmaster であっても異 Guild の Mind は監視不可。
+
+        claim-only-own-guild と同じ Guild 隔離の思想。Guildmaster は自 Guild の
+        運営層であって、ai-org-os 全 Realm を覗ける存在ではない。
+        """
+        _write_mind_meta(
+            self.home, "gm-research", guild="research", persona="guildmaster",
+        )
+        _write_mind_meta(
+            self.home, "bob-backend", guild="backend", persona="implementer",
+        )
+        self._send_to("carol", "bob-backend")
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "gm-research", "target_mind": "bob-backend"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_guild"), "research")
+        self.assertEqual(out.get("target_guild"), "backend")
+        self.assertIn("cross-guild", out.get("error", "").lower())
+
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
 class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
