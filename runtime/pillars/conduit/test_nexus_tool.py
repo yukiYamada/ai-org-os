@@ -34,11 +34,16 @@ except Exception:  # noqa: BLE001
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-def _write_mind_meta(home: Path, mind_name: str, guild: str) -> None:
+def _write_mind_meta(
+    home: Path,
+    mind_name: str,
+    guild: str,
+    persona: str = "designer",
+) -> None:
     d = home / "minds" / mind_name
     d.mkdir(parents=True, exist_ok=True)
     (d / ".mind-meta.md").write_text(
-        f"---\nmind_name: {mind_name}\nkind: generic\npersona: designer\n"
+        f"---\nmind_name: {mind_name}\nkind: generic\npersona: {persona}\n"
         f"guild: {guild}\n---\n",
         encoding="utf-8",
     )
@@ -207,6 +212,165 @@ class TestReadPendingIssues(unittest.TestCase):
         self.assertEqual(data.get("count"), 2)
         guilds = sorted(item["guild"] for item in data["issues"])
         self.assertEqual(guilds, ["backend", "default"])
+
+
+@unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
+class TestReadInboxGuildmasterAxiom(unittest.TestCase):
+    """Phase 5c-2 / ADR-0021: target_mind を別 Mind に指定する場合、
+    発令者の persona が guildmaster でなければ code: forbidden で reject。
+    自分の inbox を読むときは従来通り誰でも可。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+        self._old_bound = os.environ.pop("AI_ORG_OS_MIND_NAME", None)
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+        self.nexus = importlib.import_module("nexus")
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        if self._old_bound is not None:
+            os.environ["AI_ORG_OS_MIND_NAME"] = self._old_bound
+        self.tmp.cleanup()
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+
+    def _call(self, name: str, args: dict) -> dict:
+        result = asyncio.run(self.nexus.call_tool(name, args))
+        return json.loads(result[0].text)
+
+    def _send_to(self, sender: str, recipient: str, topic: str = "hi") -> None:
+        # tmp Nexus を直接呼んで Dispatch を 1 件 inbox に置く。
+        from storage import Nexus as _NexusCls  # noqa: PLC0415
+        storage_dir = self.home / "conduit-storage"
+        unbound = _NexusCls(storage_dir=storage_dir, identity=None)
+        unbound.send_dispatch(
+            from_mind=sender, to_mind=recipient, topic=topic, body="x",
+        )
+
+    def test_self_inbox_works_for_any_persona(self) -> None:
+        _write_mind_meta(self.home, "alice", guild="default", persona="designer")
+        self._send_to("bob", "alice")
+        out = self._call("read_inbox", {"mind_name": "alice"})
+        self.assertTrue(out.get("ok"), out)
+        self.assertEqual(out.get("count"), 1)
+
+    def test_others_inbox_forbidden_for_designer(self) -> None:
+        _write_mind_meta(self.home, "alice", guild="default", persona="designer")
+        _write_mind_meta(self.home, "bob", guild="default", persona="implementer")
+        self._send_to("carol", "bob")
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "alice", "target_mind": "bob"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "designer")
+        self.assertIn("read-others-inbox-only-by-guildmaster", out.get("error", ""))
+
+    def test_others_inbox_allowed_for_guildmaster(self) -> None:
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        _write_mind_meta(self.home, "bob", guild="default", persona="implementer")
+        self._send_to("carol", "bob")
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "gm", "target_mind": "bob"},
+        )
+        self.assertTrue(out.get("ok"), out)
+        self.assertEqual(out.get("mind"), "bob")
+        self.assertEqual(out.get("count"), 1)
+        self.assertEqual(out.get("observed_by"), "gm")
+
+    def test_target_mind_format_validation(self) -> None:
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        # 形式違反 target_mind は ValueError (storage._validate_mind_name 経由)
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "gm", "target_mind": "../escape"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertIn("target_mind", out.get("error", ""))
+
+
+@unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
+class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
+    """Phase 5c-2 / ADR-0021: spawn_mind は persona=guildmaster の Mind のみ可。
+    spawn-mind.sh を subprocess で呼ぶため、host venv の python + Guild
+    template が利用可能な統合環境前提のテストは別途 e2e で確認する。
+    本ファイルでは axiom 強制部分 (= forbidden の判定) のみを単体テスト。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+        self._old_bound = os.environ.pop("AI_ORG_OS_MIND_NAME", None)
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+        self.nexus = importlib.import_module("nexus")
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        if self._old_bound is not None:
+            os.environ["AI_ORG_OS_MIND_NAME"] = self._old_bound
+        self.tmp.cleanup()
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+
+    def _call(self, name: str, args: dict) -> dict:
+        result = asyncio.run(self.nexus.call_tool(name, args))
+        return json.loads(result[0].text)
+
+    def test_spawn_forbidden_for_designer(self) -> None:
+        _write_mind_meta(self.home, "alice", guild="default", persona="designer")
+        out = self._call(
+            "spawn_mind",
+            {
+                "mind_name": "alice", "new_mind_name": "newbie",
+                "kind": "generic", "persona": "designer",
+            },
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "designer")
+        self.assertIn("guildmaster-only-spawn", out.get("error", ""))
+
+    def test_spawn_forbidden_for_unknown_mind(self) -> None:
+        # .mind-meta.md が存在しない (= persona = None) → forbidden
+        out = self._call(
+            "spawn_mind",
+            {
+                "mind_name": "ghost", "new_mind_name": "newbie",
+                "kind": "generic", "persona": "designer",
+            },
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "<unknown>")
+
+    def test_spawn_format_validation_for_new_mind_name(self) -> None:
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        # 不正な new_mind_name は ValueError で reject (path traversal 防御)
+        out = self._call(
+            "spawn_mind",
+            {
+                "mind_name": "gm", "new_mind_name": "../escape",
+                "kind": "generic", "persona": "designer",
+            },
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertIn("new_mind_name", out.get("error", ""))
 
 
 if __name__ == "__main__":

@@ -355,6 +355,63 @@ def get_mind_guild(
     return value if value else DEFAULT_GUILD
 
 
+def get_mind_persona(
+    mind_name: str,
+    minds_dir: Path | None = None,
+) -> str | None:
+    """Mind の persona を `.mind-meta.md` から読む (Phase 5c-2 / ADR-0021)。
+
+    Guildmaster axiom の機械強制で「発令 Mind の persona が guildmaster か?」を
+    判定するために使う。`.mind-meta.md` が無い / `persona:` 欠落のときは None。
+
+    例外: 形式違反の mind_name は呼び出し側で拒否済の想定 (Nexus の identity
+    binding 経由)。本関数は read 失敗を例外化せず None を返す (caller 側で
+    None == 「guildmaster でない」と判断、forbidden で reject する)。
+    """
+    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
+    meta_path = base / mind_name / ".mind-meta.md"
+    return _read_mind_meta_field(meta_path, "persona")
+
+
+# Phase 5c-2 / ADR-0021: Guildmaster axiom の機械強制で使う persona 名。
+# B (Persona = templates/personas/guildmaster.md) と A (axiom) の接続点。
+GUILDMASTER_PERSONA = "guildmaster"
+
+
+def is_guildmaster(
+    mind_name: str,
+    minds_dir: Path | None = None,
+) -> bool:
+    """Mind の persona が guildmaster かどうか (Phase 5c-2 / ADR-0021)。
+
+    Guildmaster 専用 axiom (`guildmaster-only-spawn` / `read-others-inbox-only-
+    by-guildmaster`) の機械強制チェックで使う thin helper。Persona が読めない /
+    異なる場合は False を返す。
+    """
+    persona = get_mind_persona(mind_name, minds_dir=minds_dir)
+    return persona == GUILDMASTER_PERSONA
+
+
+def enumerate_guildmasters(
+    guild_name: str,
+    minds_dir: Path | None = None,
+) -> list[str]:
+    """指定 Guild に所属する persona=guildmaster の Mind 一覧 (Phase 5c-2)。
+
+    observe.py --realm で Guild ごとの運営層の存在を可視化するために使う。
+    `enumerate_members` の派生で、persona フィールドが GUILDMASTER_PERSONA と
+    一致する Mind だけを返す。
+    """
+    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
+    members = enumerate_members(guild_name, minds_dir=base)
+    result: list[str] = []
+    for m in members:
+        meta = base / m / ".mind-meta.md"
+        if _read_mind_meta_field(meta, "persona") == GUILDMASTER_PERSONA:
+            result.append(m)
+    return result
+
+
 def enumerate_members(
     guild_name: str,
     minds_dir: Path | None = None,

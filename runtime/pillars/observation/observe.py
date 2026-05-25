@@ -274,6 +274,7 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
         sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "registry"))
         from guild import (  # type: ignore[import-not-found]
             DEFAULT_GUILD,
+            enumerate_guildmasters,
             enumerate_members,
             list_guilds,
         )
@@ -299,13 +300,18 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
             for gname in guild_names:
                 members = enumerate_members(gname)
                 member_str = ", ".join(members) if members else "(none)"
+                # Phase 5c-2 (ADR-0021): Guildmaster 在/不在を可視化。
+                # Guildmaster axiom (guildmaster-only-spawn 等) が機能するかは
+                # 「persona=guildmaster の Mind が居るか」で決まる (= 依存注入)。
+                gms = enumerate_guildmasters(gname)
+                gm_str = ", ".join(gms) if gms else "(none)"
                 pending_str = (
                     "?" if inbox_unknown
                     else str(pending_by_guild.get(gname, 0))
                 )
                 sections.append(
                     f"  {gname}: members={len(members)} [{member_str}], "
-                    f"pending={pending_str}"
+                    f"guildmaster=[{gm_str}], pending={pending_str}"
                 )
             if inbox_unknown:
                 # 「?」が並んでいる理由を 1 行で明示する
