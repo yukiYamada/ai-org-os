@@ -282,6 +282,42 @@ class TestKindOverlay(unittest.TestCase):
         self.assertIn("specialist", names)
         self.assertIn("generic", names, "templates の generic も同時に見える")
 
+    def test_malformed_home_kind_shadows_templates_in_list(self) -> None:
+        """Codex P2 (#88): home に同名 .md が **存在する** 場合、parse 失敗でも
+        shadow として扱う。templates にこっそりフォールバックさせない。
+
+        理由: 利用者が `$AI_ORG_OS_HOME/kinds/generic.md` を書き換えたが
+        frontmatter を壊した場合、`list` で templates の generic が見える一方
+        `get_kind('generic')` は home の壊れたファイルで fail する不整合を
+        避ける。両者とも「shadow されている = home の問題を直して」と一貫させる。
+        """
+        home_kinds = self.home / "kinds"
+        home_kinds.mkdir(parents=True)
+        # frontmatter 無しの壊れた generic.md を home に置く
+        (home_kinds / "generic.md").write_text(
+            "no frontmatter, just text", encoding="utf-8"
+        )
+        # list_kinds: home の generic が malformed → shadow とみなし、
+        # templates の generic も結果に含まない (= "generic" は list に出ない)
+        names = [k.name for k in list_kinds()]
+        self.assertNotIn(
+            "generic", names,
+            "home の malformed file が templates をマスクすべき "
+            "(shadow 原則、Codex P2 #88)",
+        )
+
+    def test_malformed_home_kind_shadows_templates_in_get(self) -> None:
+        """同上の get_kind 版。home に file 存在 → None を返し、templates に
+        フォールバックしない。"""
+        home_kinds = self.home / "kinds"
+        home_kinds.mkdir(parents=True)
+        (home_kinds / "generic.md").write_text(
+            "no frontmatter", encoding="utf-8"
+        )
+        # home に generic.md は在るが parse 不能 → None
+        # templates の generic にフォールバックしない (shadow)
+        self.assertIsNone(get_kind("generic"))
+
 
 class TestOSErrorHandling(unittest.TestCase):
     def test_unreadable_file_is_skipped(self) -> None:

@@ -216,9 +216,15 @@ def list_kinds(kinds_dir: Path | None = None) -> list[KindInfo]:
     - source: `$AI_ORG_OS_HOME/kinds/*.md` (実体) を最優先、無ければ
       `templates/kinds/*.md` (テンプレ) にフォールバック
     - 同名 Kind が両方にある場合、home 側を採用、templates 側は隠れる
+    - Codex P2 (#88): higher-priority source に同名 .md が **存在する** 場合、
+      たとえ malformed (frontmatter 不正等で parse 失敗) でも shadow とみなし、
+      lower-priority source の同名 entry を採用しない。これにより `list` と
+      `get_kind` / `is_registered` が一貫する (壊れた home file が静かに
+      templates にフォールバックして見える不整合を防ぐ)。
     - .md 拡張子のみ対象
     - frontmatter から name / version / status を読む
-    - frontmatter が無い / 不正なものは無視（warning ログのみ）
+    - frontmatter が無い / 不正なものは無視（warning ログのみ。lower への
+      フォールバックは shadow ルールで抑制される）
     - 結果は name の辞書順でソート（呼び出し側で安定した順序を期待できる）
 
     `kinds_dir` を明示した場合は overlay を無視し、その dir 単体で動く
@@ -227,6 +233,9 @@ def list_kinds(kinds_dir: Path | None = None) -> list[KindInfo]:
     冪等性: source の状態が変わらない限り同じ結果を返す。
     """
     results_by_name: dict[str, KindInfo] = {}
+    # higher-priority source で「同名 .md が存在した stem」を記録。
+    # malformed でファイルが parse 不能でも shadow として lower を抑止する。
+    shadowed_stems: set[str] = set()
     for source in _search_dirs(kinds_dir):
         if not source.is_dir():
             continue
@@ -234,14 +243,28 @@ def list_kinds(kinds_dir: Path | None = None) -> list[KindInfo]:
             entries = sorted(source.iterdir(), key=lambda p: p.name)
         except OSError as exc:
             raise RegistryError(f"failed to list {source}: {exc}") from exc
+        # この source で「.md が存在した stem」を一旦集める。
+        # source 内のループが終わってから shadowed_stems に足す
+        # (= 同 source 内の重複を排除しない設計だが、現状そもそも 1 stem
+        # 1 file の前提なので副作用は無い)。
+        local_stems: set[str] = set()
         for entry in entries:
             if not entry.is_file() or entry.suffix != ".md":
                 continue
+            stem = entry.stem
+            local_stems.add(stem)
+            if stem in shadowed_stems:
+                # higher-priority source に同名があった (malformed 含む) → skip
+                continue
             info = _read_kind_file(entry)
             if info is None:
+                # 自分の source の parse 失敗。下位 source にもフォールバック
+                # させない (Codex P2 #88: shadowing consistency)。
                 continue
-            # _search_dirs の先頭 (home) が優先。同名は最初に登録された方を残す。
+            # `info.name == stem` は _read_kind_file 内で正規化済 (不一致時は
+            # filename を採用するため、shadow の判定も stem ベースで安全)。
             results_by_name.setdefault(info.name, info)
+        shadowed_stems |= local_stems
     return sorted(results_by_name.values(), key=lambda k: k.name)
 
 
@@ -249,7 +272,9 @@ def get_kind(name: str, kinds_dir: Path | None = None) -> KindInfo | None:
     """指定 Kind の情報を返す。無ければ None。
 
     Phase 5c-1 / ADR-0020: home (実体) → templates (同梱) の順で探し、
-    最初に見つかった方を返す。
+    最初に **ファイルが存在した** source で read する。malformed (parse 失敗)
+    の場合は None を返し、lower-priority source へはフォールバックしない
+    (Codex P2 #88 / list_kinds と同じ shadowing consistency)。
 
     name のバリデーション (_VALID_NAME_RE) で path traversal 攻撃を防ぐ。
     """
@@ -260,6 +285,8 @@ def get_kind(name: str, kinds_dir: Path | None = None) -> KindInfo | None:
     for source in _search_dirs(kinds_dir):
         candidate = source / f"{name}.md"
         if candidate.is_file():
+            # 最初に file が在った source で確定。malformed なら None。
+            # 下位 source にはフォールバックしない (shadow 原則)。
             return _read_kind_file(candidate)
     return None
 
