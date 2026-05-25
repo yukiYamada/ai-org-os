@@ -105,6 +105,20 @@ def _latest_mtime(mind_dir: Path) -> float:
     return latest
 
 
+def _registry_dir() -> Path:
+    """`$AI_ORG_OS_HOME/registry/minds/` (Phase 5c-2 P1 fix #91)。
+
+    Mind の persona / guild / kind / spawned_at の **authoritative source**。
+    Mindspace 内 `.mind-meta.md` は Mind 自身が書き換え可能なため authz の
+    根拠にできない (caller-writable 排除)。registry は Pillar 管理領域。
+    """
+    home = os.environ.get("AI_ORG_OS_HOME")
+    if home:
+        return Path(home) / "registry" / "minds"
+    h = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(h) / ".ai-org-os" / "registry" / "minds"
+
+
 def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, str]]:
     """Walk $AI_ORG_OS_HOME/minds/ and return (observation, status, category) per Mind.
 
@@ -112,15 +126,19 @@ def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, st
     Only directories with .mind-meta.md count as real spawned Minds (the
     convention from spawn-mind.sh). Bare dirs are ignored.
 
-    Note (Phase 5c-1): MindObservation には guild フィールドが無いので
-    table 表示で guild を出す場合は呼び出し側で再度 .mind-meta.md を読む
-    (派生表示)。本関数は既存の出力契約を保つ。
+    Phase 5c-2 P1 fix (#91 Codex): kind / persona / spawned_at の参照は
+    Mind registry (`$AI_ORG_OS_HOME/registry/minds/<name>.md`) を優先する。
+    Mindspace 内 `.mind-meta.md` は Mind が書き換え可能なため、改ざんが
+    あった場合に観察結果が「真実 (registry)」と乖離する。registry が無い
+    過渡期 Mind は `.mind-meta.md` にフォールバック (= 既存テスト fixture
+    互換)。inbox/archive/mtime は引き続き Mindspace 内の動的状態を見る。
     """
     result: list[tuple[MindObservation, str, str]] = []
     minds_dir = _minds_dir()
     if not minds_dir.is_dir():
         return result
 
+    registry_dir = _registry_dir()
     for mind_dir in sorted(minds_dir.iterdir()):
         if not mind_dir.is_dir():
             continue
@@ -128,11 +146,15 @@ def gather_observations(now_epoch: float) -> list[tuple[MindObservation, str, st
         if not meta.is_file():
             continue
         name = mind_dir.name
+        # Authoritative メタ source は registry。無ければ Mindspace 内
+        # `.mind-meta.md` にフォールバック (= 過渡期 / 旧 Mind 互換)。
+        reg_entry = registry_dir / f"{name}.md"
+        meta_source = reg_entry if reg_entry.is_file() else meta
         observation = MindObservation(
             mind_name=name,
-            kind=_read_meta(meta, "kind"),
-            persona=_read_meta(meta, "persona"),
-            spawned_at_epoch=_epoch_from_iso(_read_meta(meta, "spawned_at")),
+            kind=_read_meta(meta_source, "kind"),
+            persona=_read_meta(meta_source, "persona"),
+            spawned_at_epoch=_epoch_from_iso(_read_meta(meta_source, "spawned_at")),
             last_activity_epoch=_latest_mtime(mind_dir),
             unread_inbox_count=_count_messages(_inbox_dir(name)),
             archive_count=_count_messages(_archive_dir(name)),

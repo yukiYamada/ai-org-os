@@ -135,6 +135,13 @@ assert_file_contains "meta has kind" "${mind_dir}/.mind-meta.md" "kind: generic"
 assert_file_contains "meta has persona" "${mind_dir}/.mind-meta.md" "persona: designer"
 # Phase 5c-1 / ADR-0019: --guild 省略時は default Guild に所属
 assert_file_contains "meta has guild=default" "${mind_dir}/.mind-meta.md" "guild: default"
+# Phase 5c-2 P1 fix (#91 Codex): Mind registry が authoritative source として
+# Mindspace の外に書かれること。Mindspace 内 .mind-meta.md は informational copy。
+registry_entry="${AI_ORG_OS_HOME}/registry/minds/${mind}.md"
+assert_file_exists "Mind registry entry (authoritative)" "${registry_entry}"
+assert_file_contains "registry has mind_name" "${registry_entry}" "mind_name: ${mind}"
+assert_file_contains "registry has persona" "${registry_entry}" "persona: designer"
+assert_file_contains "registry has guild" "${registry_entry}" "guild: default"
 assert_file_contains ".mcp.json references nexus server" "${mind_dir}/.mcp.json" '"nexus"'
 assert_file_contains ".mcp.json references nexus.py" "${mind_dir}/.mcp.json" "nexus.py"
 # Issue #19 (ADR-0008): .mcp.json must bind the Nexus session to this Mind's identity.

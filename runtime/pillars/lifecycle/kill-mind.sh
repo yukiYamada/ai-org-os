@@ -108,4 +108,16 @@ fi
 
 echo "[kill-mind] Destroying Mind '${MIND_NAME}' (Mindspace at ${MIND_DIR})"
 rm -rf "${MIND_DIR}"
+
+# Phase 5c-2 P1 fix (#91 Codex): Mind registry エントリも削除する。
+# registry の方が authoritative なので、削除順序は (1) Mindspace → (2) registry
+# にして、削除途中でも「registry にある = 生きてる」と誤って observe / axiom が
+# 判定しないようにする。最終的に Mindspace と registry が同期した unregistered
+# 状態になる。
+REGISTRY_ENTRY="${RUNTIME_HOME}/registry/minds/${MIND_NAME}.md"
+if [ -f "${REGISTRY_ENTRY}" ]; then
+  rm -f "${REGISTRY_ENTRY}"
+  echo "[kill-mind] Removed registry entry: ${REGISTRY_ENTRY}"
+fi
+
 echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace is irrecoverable."

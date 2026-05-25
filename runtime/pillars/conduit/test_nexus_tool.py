@@ -40,9 +40,24 @@ def _write_mind_meta(
     guild: str,
     persona: str = "designer",
 ) -> None:
+    """Test fixture: Mind を spawn したことにする。
+
+    Phase 5c-2 P1 fix (#91 Codex): authoritative メタは Mind registry
+    (`<home>/registry/minds/<name>.md`)。Mindspace 内 `.mind-meta.md` も
+    informational copy として書く (observe.py が走査するため)。
+    """
+    # Mindspace (informational copy + observe.py が走査する目印)
     d = home / "minds" / mind_name
     d.mkdir(parents=True, exist_ok=True)
     (d / ".mind-meta.md").write_text(
+        f"---\nmind_name: {mind_name}\nkind: generic\npersona: {persona}\n"
+        f"guild: {guild}\n---\n",
+        encoding="utf-8",
+    )
+    # Mind registry (authoritative for axiom enforcement)
+    reg = home / "registry" / "minds"
+    reg.mkdir(parents=True, exist_ok=True)
+    (reg / f"{mind_name}.md").write_text(
         f"---\nmind_name: {mind_name}\nkind: generic\npersona: {persona}\n"
         f"guild: {guild}\n---\n",
         encoding="utf-8",
@@ -394,6 +409,92 @@ class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
         )
         self.assertFalse(out.get("ok"), out)
         self.assertIn("new_mind_name", out.get("error", ""))
+
+
+@unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
+class TestRegistryAuthoritativeNotMindspace(unittest.TestCase):
+    """Codex P1 (#91) 回帰防止: Mindspace 内 `.mind-meta.md` を改ざんしても
+    axiom 強制を bypass できないことを検証する。authoritative source は
+    Mind registry (`$AI_ORG_OS_HOME/registry/minds/<name>.md`) のみ。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+        self._old_bound = os.environ.pop("AI_ORG_OS_MIND_NAME", None)
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+        self.nexus = importlib.import_module("nexus")
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        if self._old_bound is not None:
+            os.environ["AI_ORG_OS_MIND_NAME"] = self._old_bound
+        self.tmp.cleanup()
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+
+    def _call(self, name: str, args: dict) -> dict:
+        result = asyncio.run(self.nexus.call_tool(name, args))
+        return json.loads(result[0].text)
+
+    def _spawn_designer_with_forged_mindspace(self, mind: str, guild: str) -> None:
+        """designer の Mind を Mindspace に作るが、`.mind-meta.md` を
+        `persona: guildmaster` で **改ざん**する。registry は本来の designer
+        のまま。Mind が「caller-controlled flag」で昇格を試みる攻撃の模倣。
+        """
+        # 正しい registry エントリ (= 真の persona は designer)
+        reg = self.home / "registry" / "minds"
+        reg.mkdir(parents=True, exist_ok=True)
+        (reg / f"{mind}.md").write_text(
+            f"---\nmind_name: {mind}\nkind: generic\npersona: designer\n"
+            f"guild: {guild}\n---\n",
+            encoding="utf-8",
+        )
+        # Mindspace 内の改ざん .mind-meta.md (= Mind が自分で書き換えたつもり)
+        ms = self.home / "minds" / mind
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / ".mind-meta.md").write_text(
+            f"---\nmind_name: {mind}\nkind: generic\npersona: guildmaster\n"
+            f"guild: {guild}\n---\n",
+            encoding="utf-8",
+        )
+
+    def test_forged_mindspace_persona_cannot_bypass_spawn_axiom(self) -> None:
+        """designer Mind が Mindspace 内 `.mind-meta.md` で `persona:
+        guildmaster` を僭称しても、`spawn_mind` は registry 側の真値 (=
+        designer) を見るので forbidden で reject される。
+        """
+        self._spawn_designer_with_forged_mindspace("attacker", "default")
+        out = self._call(
+            "spawn_mind",
+            {
+                "mind_name": "attacker", "new_mind_name": "victim",
+                "kind": "generic", "persona": "designer",
+            },
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        # registry を見ているので persona は designer のまま見える
+        self.assertEqual(out.get("requester_persona"), "designer")
+
+    def test_forged_mindspace_persona_cannot_bypass_read_inbox_axiom(self) -> None:
+        """同上を read_inbox 経路でも検証 (target_mind 指定して他者観察)。"""
+        self._spawn_designer_with_forged_mindspace("attacker", "default")
+        # 観察対象 (bob) は別途用意
+        _write_mind_meta(self.home, "bob", guild="default", persona="implementer")
+        out = self._call(
+            "read_inbox",
+            {"mind_name": "attacker", "target_mind": "bob"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "designer")
 
 
 if __name__ == "__main__":

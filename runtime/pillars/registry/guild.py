@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Guild Catalog (Phase 5c-1 / ADR-0019 / ADR-0020)。
+Guild Catalog (Phase 5c-1 / ADR-0019 / ADR-0020 / 5c-2 P1 fix)。
 
 Guild = 組織枠の物理表現 (ADR-0019)。本モジュールは:
 
 - Guild manifest のロード (`<source>/<name>/manifest.md`)
 - Guild membership 検証 (kind ∈ manifest.kinds, persona ∈ manifest.personas)
-- Mind の所属 Guild 解決 (`.mind-meta.md` の `guild:` フィールド)
+- Mind の所属 Guild 解決 (Mind registry の `guild:` フィールド)
+- Mind の persona 解決 (Mind registry の `persona:` フィールド)
 - Issue の所属 Guild 解決 (Issue frontmatter の `guild:` フィールド)
-- Guild member 集約 (`.mind-meta.md` を走査して算出、ADR-0019 §1)
+- Guild member 集約 (registry を走査して算出)
 
 を提供する。
 
@@ -16,11 +17,21 @@ Phase 5c-1 (ADR-0020) で Guild manifest の source は 2 layer overlay に:
   1. `$AI_ORG_OS_HOME/guilds/<name>/` (利用者の組織実体、優先)
   2. `templates/guilds/<name>/` (ai-org-os 同梱テンプレ、fallback)
 
+Phase 5c-2 P1 fix (#91 Codex): Mind の persona / guild は **Mind registry**
+(`$AI_ORG_OS_HOME/registry/minds/<name>.md`) を authoritative source とする。
+Mindspace 内の `.mind-meta.md` は Mind 自身が書き換え可能なため authz には
+使わない (caller-writable な認可根拠を排除)。registry は Pillar 管理領域
+(ADR-0011) に置かれ、spawn-mind.sh / kill-mind.sh のみが atomic に書き換える。
+
 設計の根拠:
-- ADR-0019 — Guild 物理表現と「組織パッケージ」基礎
+- ADR-0019 — Guild 物理表現と「組織パッケージ」基礎 (§1 の authoritative source
+  は本 fix で `.mind-meta.md` → registry に更新)
 - ADR-0020 — 世界の構成 (runtime/) vs 組織依存物 (templates/ + AI_ORG_OS_HOME)
   の物理分離。Guild manifest はこの「依存物」カテゴリ。
-- ADR-0011 — Pillar 編集不可。本ファイルは Registry Pillar 配下
+- ADR-0011 — Pillar 編集不可。本ファイルは Registry Pillar 配下。registry/ も
+  Pillar 管理領域として Mind は触らない
+- ADR-0008 — identity binding。本モジュールの persona / guild lookup と組み合わせて
+  「Mind が自分以外を名乗らない」+「Mind が自分の persona/guild を偽れない」を成立
 - ADR-0017 — 層 A / 層 B 分離。本モジュールは層 B (組織) を機械検証で
   支える infrastructure 層
 
@@ -118,8 +129,32 @@ def _search_dirs(guilds_dir: Path | None) -> list[Path]:
     return dirs
 
 
+def _default_registry_dir() -> Path:
+    """Mind registry dir (`$AI_ORG_OS_HOME/registry/minds/`)。
+
+    Phase 5c-2 P1 fix (#91 Codex): Mind の persona / guild の authoritative
+    source は registry。Mindspace 配下 (`$AI_ORG_OS_HOME/minds/<name>/`) では
+    `.mind-meta.md` を Mind 自身が書き換え可能なため authz の根拠にできない
+    (caller-controlled flag 問題)。registry は Pillar 管理領域。
+
+    各 Mind の registry エントリは `<name>.md` (ファイル) として置く。中身は
+    `.mind-meta.md` と同じ frontmatter (kind / persona / guild / spawned_at)。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env) / "registry" / "minds"
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os" / "registry" / "minds"
+
+
+# 旧 API 互換用エイリアス (テスト fixture が minds_dir を渡してくる呼び出しを
+# 残しておくため)。新規コードは _default_registry_dir を使う。
 def _default_minds_dir() -> Path:
-    """`$AI_ORG_OS_HOME/minds/`。observe.py の `_minds_dir` と同じ規約。"""
+    """[Deprecated, P1 fix #91] 旧 `.mind-meta.md` 走査用 Mindspace dir 解決。
+
+    現在は authoritative source ではないので、本関数を直接使う新規ロジックは
+    避けること。テスト fixture / informational lookup のみで使われる。
+    """
     env = os.environ.get("AI_ORG_OS_HOME")
     if env:
         return Path(env) / "minds"
@@ -337,40 +372,65 @@ def _read_mind_meta_field(meta_path: Path, key: str) -> str | None:
     return None
 
 
+def _registry_path_for(mind_name: str, registry_dir: Path | None) -> Path:
+    """Mind registry エントリの絶対パス (`<registry>/<name>.md`)。
+
+    Phase 5c-2 P1 fix: registry は Mindspace の外 (Pillar 管理領域)。
+    `minds_dir` 引数 (旧 API) は本関数では使わない (registry は別 dir)。
+    テスト fixture は registry_dir を明示する。
+    """
+    base = (
+        Path(registry_dir)
+        if registry_dir is not None
+        else _default_registry_dir()
+    )
+    return base / f"{mind_name}.md"
+
+
 def get_mind_guild(
     mind_name: str,
-    minds_dir: Path | None = None,
+    minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
+    *,
+    registry_dir: Path | None = None,
 ) -> str:
-    """Mind の所属 Guild を `.mind-meta.md` から読む。
+    """Mind の所属 Guild を **Mind registry** から読む (Phase 5c-2 P1 fix)。
 
-    `.mind-meta.md` が存在しない / `guild:` フィールドが無い場合は
-    `DEFAULT_GUILD` を返す (後方互換: Phase 5c-1 以前の Mind は default 扱い)。
+    registry エントリが存在しない / `guild:` フィールドが無い場合は
+    `DEFAULT_GUILD` を返す (後方互換: Phase 5c-1 以前の Mind / 移行中の Mind
+    は default 扱い)。
 
-    例外: 形式違反の mind_name は呼び出し側で拒否済の想定 (Nexus 側の
-    identity binding 等)。本関数はファイル read 失敗を例外化しない。
+    旧 API の `minds_dir` 引数は互換のため残すが本関数では参照しない。
+    `.mind-meta.md` (Mindspace 内) は Mind が書き換え可能なため authoritative
+    source としては使わない (Codex P1 #91 fix)。
+
+    例外: 形式違反の mind_name は呼び出し側で拒否済の想定 (Nexus の identity
+    binding 等)。本関数はファイル read 失敗を例外化しない。
     """
-    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
-    meta_path = base / mind_name / ".mind-meta.md"
-    value = _read_mind_meta_field(meta_path, "guild")
+    reg_path = _registry_path_for(mind_name, registry_dir)
+    value = _read_mind_meta_field(reg_path, "guild")
     return value if value else DEFAULT_GUILD
 
 
 def get_mind_persona(
     mind_name: str,
-    minds_dir: Path | None = None,
+    minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
+    *,
+    registry_dir: Path | None = None,
 ) -> str | None:
-    """Mind の persona を `.mind-meta.md` から読む (Phase 5c-2 / ADR-0021)。
+    """Mind の persona を **Mind registry** から読む (Phase 5c-2 P1 fix #91)。
 
     Guildmaster axiom の機械強制で「発令 Mind の persona が guildmaster か?」を
-    判定するために使う。`.mind-meta.md` が無い / `persona:` 欠落のときは None。
+    判定する根拠データ。authoritative source は registry (Pillar 管理) で
+    あって Mindspace の `.mind-meta.md` ではない (caller-writable 排除)。
+
+    registry エントリ無 / `persona:` 欠落のときは None。
 
     例外: 形式違反の mind_name は呼び出し側で拒否済の想定 (Nexus の identity
     binding 経由)。本関数は read 失敗を例外化せず None を返す (caller 側で
     None == 「guildmaster でない」と判断、forbidden で reject する)。
     """
-    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
-    meta_path = base / mind_name / ".mind-meta.md"
-    return _read_mind_meta_field(meta_path, "persona")
+    reg_path = _registry_path_for(mind_name, registry_dir)
+    return _read_mind_meta_field(reg_path, "persona")
 
 
 # Phase 5c-2 / ADR-0021: Guildmaster axiom の機械強制で使う persona 名。
@@ -380,61 +440,76 @@ GUILDMASTER_PERSONA = "guildmaster"
 
 def is_guildmaster(
     mind_name: str,
-    minds_dir: Path | None = None,
+    minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
+    *,
+    registry_dir: Path | None = None,
 ) -> bool:
     """Mind の persona が guildmaster かどうか (Phase 5c-2 / ADR-0021)。
 
     Guildmaster 専用 axiom (`guildmaster-only-spawn` / `read-others-inbox-only-
-    by-guildmaster`) の機械強制チェックで使う thin helper。Persona が読めない /
+    by-guildmaster`) の機械強制チェックで使う thin helper。authoritative
+    source は Mind registry (Mindspace 外、P1 fix #91)。Persona が読めない /
     異なる場合は False を返す。
     """
-    persona = get_mind_persona(mind_name, minds_dir=minds_dir)
+    persona = get_mind_persona(mind_name, registry_dir=registry_dir)
     return persona == GUILDMASTER_PERSONA
 
 
 def enumerate_guildmasters(
     guild_name: str,
-    minds_dir: Path | None = None,
+    minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
+    *,
+    registry_dir: Path | None = None,
 ) -> list[str]:
     """指定 Guild に所属する persona=guildmaster の Mind 一覧 (Phase 5c-2)。
 
+    Phase 5c-2 P1 fix: authoritative source は Mind registry。
     observe.py --realm で Guild ごとの運営層の存在を可視化するために使う。
-    `enumerate_members` の派生で、persona フィールドが GUILDMASTER_PERSONA と
-    一致する Mind だけを返す。
     """
-    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
-    members = enumerate_members(guild_name, minds_dir=base)
+    base = (
+        Path(registry_dir)
+        if registry_dir is not None
+        else _default_registry_dir()
+    )
+    members = enumerate_members(guild_name, registry_dir=base)
     result: list[str] = []
     for m in members:
-        meta = base / m / ".mind-meta.md"
-        if _read_mind_meta_field(meta, "persona") == GUILDMASTER_PERSONA:
+        entry = base / f"{m}.md"
+        if _read_mind_meta_field(entry, "persona") == GUILDMASTER_PERSONA:
             result.append(m)
     return result
 
 
 def enumerate_members(
     guild_name: str,
-    minds_dir: Path | None = None,
+    minds_dir: Path | None = None,  # 旧 API 互換引数 (未使用)
+    *,
+    registry_dir: Path | None = None,
 ) -> list[str]:
-    """指定 Guild に所属する Mind 名一覧 (`.mind-meta.md` を走査)。
+    """指定 Guild に所属する Mind 名一覧 (Phase 5c-2 P1 fix #91)。
 
-    所属の authoritative source は `.mind-meta.md` の `guild:` フィールド
-    (ADR-0019 §1)。本関数は派生計算であり、`runtime/guilds/<name>/` の
-    file は読まない。
+    所属の authoritative source は **Mind registry** (`$AI_ORG_OS_HOME/registry/
+    minds/<name>.md` の `guild:` フィールド)。Mindspace 内の `.mind-meta.md`
+    は Mind 自身が書き換え可能なため caller-controlled とみなし、authoritative
+    source としては使わない。本関数は派生計算であり、`guilds/<name>/` 配下の
+    manifest file は読まない。
     """
-    base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
+    base = (
+        Path(registry_dir)
+        if registry_dir is not None
+        else _default_registry_dir()
+    )
     if not base.is_dir():
         return []
     members: list[str] = []
-    for mind_dir in sorted(base.iterdir()):
-        if not mind_dir.is_dir():
+    for entry in sorted(base.iterdir()):
+        if not entry.is_file() or entry.suffix != ".md":
             continue
-        meta = mind_dir / ".mind-meta.md"
-        if not meta.is_file():
+        if not GUILD_NAME_RE.match(entry.stem):
             continue
-        g = _read_mind_meta_field(meta, "guild") or DEFAULT_GUILD
+        g = _read_mind_meta_field(entry, "guild") or DEFAULT_GUILD
         if g == guild_name:
-            members.append(mind_dir.name)
+            members.append(entry.stem)
     return members
 
 
