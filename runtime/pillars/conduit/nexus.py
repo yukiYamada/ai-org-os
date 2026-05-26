@@ -202,6 +202,41 @@ async def list_tools() -> list[Tool]:
                 "required": ["mind_name", "new_mind_name", "kind", "persona"],
             },
         ),
+        # Phase 5c-3 (ADR-0021): spawn と対称な kill_mind tool。axiom:
+        # guildmaster-only-kill (指示) を機械強制する。self-kill 不可 + 同 Guild
+        # 境界の 2 段制約を入れる (詳細は templates/guilds/default/axiom.md)。
+        # 内部では kill-mind.sh を subprocess 経由で呼び、registry-first 削除
+        # 順序 (Codex P2 #91) を再利用する。
+        Tool(
+            name="kill_mind",
+            description=(
+                "Destroy a Mind in your Guild (the Mindspace is removed and the "
+                "registry entry is invalidated). Guildmaster-only axiom (ADR-0021): "
+                "only Minds whose persona is 'guildmaster' may call this, AND only "
+                "for target Minds in the SAME guild, AND self-kill is forbidden. "
+                "Otherwise code='forbidden'. Internally invokes kill-mind.sh. "
+                "The last Guildmaster of a Guild cannot retire itself via this "
+                "tool — a human operator must use kill-mind.sh from outside the "
+                "Realm (ADR-0012)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mind_name": {
+                        "type": "string",
+                        "description": "Your Mind name (the caller, must be guildmaster).",
+                    },
+                    "target_mind": {
+                        "type": "string",
+                        "description": (
+                            "Mind name to destroy. Must be in the same Guild as "
+                            "the caller, and must not equal mind_name (no self-kill)."
+                        ),
+                    },
+                },
+                "required": ["mind_name", "target_mind"],
+            },
+        ),
     ]
 
 
@@ -488,6 +523,133 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                                 "exit_code": proc.returncode,
                                 "stderr_tail": proc.stderr[-500:],
                             }
+        elif name == "kill_mind":
+            # Phase 5c-3 (ADR-0021): guildmaster-only-kill axiom 強制 + 既存
+            # kill-mind.sh を subprocess で呼ぶ。spawn_mind と対称構造だが、
+            # 3 段チェック (persona / self / same-guild) が入る。
+            mind_name = args["mind_name"]
+            target_mind = args["target_mind"]
+            # 入力形式検証 (path traversal 等) — assert_identity / registry
+            # lookup より前に行うこと。Codex P2 #88 と同じ思想。
+            _validate_mind_name(mind_name, "mind_name")
+            _validate_mind_name(target_mind, "target_mind")
+            # identity binding (bound 時のみ効く)
+            _nexus.assert_identity(mind_name)
+            # axiom step 1: persona check (guildmaster-only-kill)
+            if not _is_guildmaster(mind_name):
+                from guild import (  # noqa: PLC0415
+                    get_mind_persona as _get_persona,
+                )
+                requester_persona = _get_persona(mind_name) or "<unknown>"
+                result = {
+                    "ok": False,
+                    "code": "forbidden",
+                    "error": (
+                        f"forbidden: only minds with persona="
+                        f"'{GUILDMASTER_PERSONA}' may kill other minds. "
+                        f"mind '{mind_name}' has persona="
+                        f"'{requester_persona}' (axiom: guildmaster-only-kill)"
+                    ),
+                    "requester_persona": requester_persona,
+                }
+            # axiom step 2: self-kill 不可。
+            # persona check より後に置く理由: 「self-kill 不可」は guildmaster
+            # 限定の制約 (designer が自分を kill しようとした場合は persona
+            # 違反の方が本質的)。エラーメッセージの一貫性のためこの順に。
+            elif mind_name == target_mind:
+                result = {
+                    "ok": False,
+                    "code": "forbidden",
+                    "error": (
+                        f"forbidden: self-kill is not permitted "
+                        f"(axiom: guildmaster-only-kill, no-self-kill clause). "
+                        f"the last guildmaster of a guild, or a guildmaster "
+                        f"that needs to retire, must be killed by a human "
+                        f"operator via kill-mind.sh (ADR-0012)"
+                    ),
+                }
+            else:
+                # axiom step 3: same-guild boundary
+                # read_inbox / spawn と同じ Guild 隔離思想。
+                requester_guild = _get_mind_guild(mind_name)
+                target_guild = _get_mind_guild(target_mind)
+                if requester_guild is None or target_guild is None:
+                    result = {
+                        "ok": False,
+                        "code": "forbidden",
+                        "error": (
+                            f"forbidden: requester or target mind has no "
+                            f"registry entry. requester='{mind_name}' "
+                            f"(guild={requester_guild!r}), target="
+                            f"'{target_mind}' (guild={target_guild!r}). "
+                            f"both must be registered (axiom: "
+                            f"guildmaster-only-kill)"
+                        ),
+                        "requester_guild": requester_guild,
+                        "target_guild": target_guild,
+                    }
+                elif requester_guild != target_guild:
+                    result = {
+                        "ok": False,
+                        "code": "forbidden",
+                        "error": (
+                            f"forbidden: guildmaster '{mind_name}' belongs "
+                            f"to guild '{requester_guild}' but target "
+                            f"'{target_mind}' belongs to guild "
+                            f"'{target_guild}'. cross-guild kill is not "
+                            f"permitted (axiom: guildmaster-only-kill, "
+                            f"same-guild boundary)"
+                        ),
+                        "requester_guild": requester_guild,
+                        "target_guild": target_guild,
+                    }
+                else:
+                    import subprocess  # noqa: PLC0415
+                    kill_sh = (
+                        _RUNTIME_DIR / "pillars" / "lifecycle" / "kill-mind.sh"
+                    )
+                    if not kill_sh.is_file():
+                        result = {
+                            "ok": False,
+                            "error": f"kill-mind.sh not found at {kill_sh}",
+                            "code": "internal_error",
+                        }
+                    else:
+                        try:
+                            proc = subprocess.run(
+                                ["bash", str(kill_sh), target_mind],
+                                capture_output=True,
+                                text=True,
+                                timeout=30,
+                            )
+                        except subprocess.TimeoutExpired:
+                            result = {
+                                "ok": False,
+                                "error": "kill-mind.sh timed out (30s)",
+                                "code": "internal_error",
+                            }
+                        else:
+                            if proc.returncode == 0:
+                                result = {
+                                    "ok": True,
+                                    "killed_mind": target_mind,
+                                    "guild": target_guild,
+                                    "killed_by": mind_name,
+                                    "stdout_tail": proc.stdout[-500:],
+                                }
+                            else:
+                                # kill-mind.sh の exit code を伝える
+                                # (2=mind not found, 5=registry remove failed)
+                                result = {
+                                    "ok": False,
+                                    "error": (
+                                        f"kill-mind.sh failed with exit "
+                                        f"{proc.returncode}"
+                                    ),
+                                    "code": "kill_failed",
+                                    "exit_code": proc.returncode,
+                                    "stderr_tail": proc.stderr[-500:],
+                                }
         else:
             result = {"ok": False, "error": f"unknown tool: {name}"}
     except KeyError as exc:
