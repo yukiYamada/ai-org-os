@@ -160,6 +160,34 @@ class TestDetectW3OrphanKind(_HomeFixture):
         self.assertEqual(s.mind, "alice")
         self.assertIn("nonexistent-kind", s.message)
 
+    def test_home_overlay_kind_is_registered(self) -> None:
+        """Codex P2 (#94): home_dir に置いた `kinds/<custom>.md` も registered
+        として扱われ、W3 false-positive にならない。
+        旧実装は list_kinds() を素で呼んで $AI_ORG_OS_HOME を見ていたため、
+        caller が別 home_dir を渡すと自身の overlay が反映されなかった。
+        """
+        # home_dir の overlay に custom kind を置く
+        kinds_dir = self.home / "kinds"
+        kinds_dir.mkdir(parents=True, exist_ok=True)
+        (kinds_dir / "custom-kind.md").write_text(
+            "---\nkind: custom-kind\nschema_version: 0.1\npurpose: test\n---\n",
+            encoding="utf-8",
+        )
+        # 設定: 別 Realm を観察する形で AI_ORG_OS_HOME を一時的に外す
+        # (env を home に一致させない状態でも detect は home の overlay を
+        # ちゃんと見ることを確認する)。
+        saved = os.environ.pop("AI_ORG_OS_HOME", None)
+        try:
+            _mk_mind(self.home, "alice", kind="custom-kind")
+            with redirect_stderr(io.StringIO()):
+                signals = anomaly.detect_w3_orphan_kind(self.home)
+        finally:
+            if saved is not None:
+                os.environ["AI_ORG_OS_HOME"] = saved
+        # custom-kind は home overlay に居るので registered 扱い → W3 出ない
+        w3 = [s for s in signals if s.code == "W3"]
+        self.assertEqual(w3, [], "home overlay kind should be registered")
+
 
 class TestDetectW1MtimeWithoutDispatch(_HomeFixture):
 

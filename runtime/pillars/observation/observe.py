@@ -601,6 +601,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # Codex P2 (#94): 逆方向 (--against のみ) も明示的に reject する。
+    # 旧実装は --diff 無しの --against を黙って通して default observation
+    # view を出していたため、自動化スクリプトの引数ミスを検出できない不整合
+    # があった。両方無 → default view、両方有 → diff、片方のみ → error の
+    # 対称な三値判定にする。
+    if diff_b and not diff_a:
+        print(
+            "[ERROR] --against requires --diff <prev-snapshot>",
+            file=sys.stderr,
+        )
+        return 2
+
     # Phase 5d-1 (#66): dispatch フロー / リソース使用量。各々独立して
     # 動作する小さなビューなので、--realm より前に分岐する。
     # --flow は他フラグ無視で flow ビューのみ。--json と組み合わせ可。

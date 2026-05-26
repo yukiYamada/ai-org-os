@@ -151,10 +151,23 @@ def detect_w3_orphan_kind(
     except ImportError:
         # registry.py が無い環境 (= 異常) → 検知をスキップ
         return []
+    # Codex P2 (#94): list_kinds の overlay 解決は $AI_ORG_OS_HOME を見るので、
+    # caller が home_dir を渡して別 Realm を観察する場合、その home の
+    # `kinds/` overlay を含めるために環境変数を一時的に向ける。同じ流儀で
+    # detect_i2_inbox_buildup でも gather_observations を呼ぶ前に env を
+    # 設定している。これにより `home_dir/kinds/<x>.md` に置いた kind が
+    # 「未登録」扱いされる false-positive W3 を防ぐ。
+    old_home = os.environ.get("AI_ORG_OS_HOME")
+    os.environ["AI_ORG_OS_HOME"] = str(home)
     try:
         registered = {ki.name for ki in list_kinds()}
     except Exception:  # noqa: BLE001
         return []
+    finally:
+        if old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = old_home
     signals: list[AnomalySignal] = []
     for entry in sorted(minds_root.iterdir()):
         if not entry.is_dir():

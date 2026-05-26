@@ -96,6 +96,37 @@ class TestFormatRealmViewInboxFailure(unittest.TestCase):
         self.assertNotIn("pending counts unknown", out)
 
 
+class TestDiffAgainstArgValidation(unittest.TestCase):
+    """Codex P2 (#94): `--against` 単独使用は error で reject される。
+
+    旧実装は `--diff` 無しの `--against` を黙って通して default observation
+    view を出していた (自動化スクリプトの引数ミスを検出できない不整合)。
+    修正後は 「両方無 → default view」「両方有 → diff」「片方のみ → error」
+    の対称な三値判定。
+    """
+
+    def test_against_without_diff_returns_error(self) -> None:
+        from io import StringIO  # noqa: PLC0415
+        from contextlib import redirect_stdout, redirect_stderr  # noqa: PLC0415
+
+        stderr_buf = StringIO()
+        with redirect_stdout(StringIO()), redirect_stderr(stderr_buf):
+            rc = observe.main(["--against", "/tmp/some.json"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--against requires --diff", stderr_buf.getvalue())
+
+    def test_diff_without_against_returns_error(self) -> None:
+        """既存の片方向 validation も維持されること。"""
+        from io import StringIO  # noqa: PLC0415
+        from contextlib import redirect_stdout, redirect_stderr  # noqa: PLC0415
+
+        stderr_buf = StringIO()
+        with redirect_stdout(StringIO()), redirect_stderr(stderr_buf):
+            rc = observe.main(["--diff", "/tmp/some.json"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--diff requires --against", stderr_buf.getvalue())
+
+
 class TestResourceMindSetConsistency(unittest.TestCase):
     """Codex P2 (#93): `--resource` (table) と `--resource --json` が同じ
     Mind 集合を返すことを検証する。
