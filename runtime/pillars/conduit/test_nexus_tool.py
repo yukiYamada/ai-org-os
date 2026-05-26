@@ -421,6 +421,137 @@ class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
 
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
+class TestKillMindGuildmasterAxiom(unittest.TestCase):
+    """Phase 5c-3 / ADR-0021: kill_mind は同 Guild 所属の persona=guildmaster の
+    Mind のみ可、かつ self-kill 不可。
+    spawn_mind と同じく subprocess (kill-mind.sh) を呼ぶ成功パスは host venv 環境
+    依存なので e2e に回し、本クラスでは axiom 強制部分 (forbidden 判定の 3 段階)
+    のみを単体テストする。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+        self._old_bound = os.environ.pop("AI_ORG_OS_MIND_NAME", None)
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+        self.nexus = importlib.import_module("nexus")
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        if self._old_bound is not None:
+            os.environ["AI_ORG_OS_MIND_NAME"] = self._old_bound
+        self.tmp.cleanup()
+        for mod in ("nexus", "inbox", "guild", "storage"):
+            sys.modules.pop(mod, None)
+
+    def _call(self, name: str, args: dict) -> dict:
+        result = asyncio.run(self.nexus.call_tool(name, args))
+        return json.loads(result[0].text)
+
+    def test_kill_forbidden_for_designer(self) -> None:
+        """非 guildmaster Persona (= designer) の Mind は他 Mind を kill できない。"""
+        _write_mind_meta(self.home, "alice", guild="default", persona="designer")
+        _write_mind_meta(self.home, "bob", guild="default", persona="implementer")
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "alice", "target_mind": "bob"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "designer")
+        self.assertIn("guildmaster-only-kill", out.get("error", ""))
+
+    def test_kill_forbidden_for_unknown_mind(self) -> None:
+        """registry エントリ無の Mind は persona=None → forbidden。
+        default fallback による越権を許さない (Codex P1 #91 2 回目と同じ思想)。
+        """
+        _write_mind_meta(self.home, "bob", guild="default", persona="implementer")
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "ghost", "target_mind": "bob"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "<unknown>")
+
+    def test_self_kill_forbidden_even_for_guildmaster(self) -> None:
+        """Guildmaster であっても自分自身を kill することは禁止。
+        最後の Guildmaster や自身の撤収は人間 (ADR-0012) が kill-mind.sh で行う。
+        """
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "gm", "target_mind": "gm"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertIn("self-kill", out.get("error", "").lower())
+        self.assertIn("guildmaster-only-kill", out.get("error", ""))
+
+    def test_cross_guild_kill_forbidden(self) -> None:
+        """Guildmaster であっても異 Guild の Mind は kill できない。
+        claim-only-own-guild / read-others-inbox-only-by-guildmaster と同じ
+        Guild 隔離思想 (Guildmaster は自 Guild の運営層であって Realm 全体の
+        撤収権を持つ存在ではない)。
+        """
+        _write_mind_meta(
+            self.home, "gm-research", guild="research", persona="guildmaster",
+        )
+        _write_mind_meta(
+            self.home, "bob-backend", guild="backend", persona="implementer",
+        )
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "gm-research", "target_mind": "bob-backend"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_guild"), "research")
+        self.assertEqual(out.get("target_guild"), "backend")
+        self.assertIn("cross-guild", out.get("error", "").lower())
+
+    def test_target_mind_format_validation(self) -> None:
+        """形式違反 target_mind (path traversal) は registry lookup より前に
+        format 検証で reject される。"""
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "gm", "target_mind": "../escape"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertIn("target_mind", out.get("error", ""))
+
+    def test_kill_forbidden_when_target_has_no_registry(self) -> None:
+        """target_mind の registry エントリ無は target_guild=None → forbidden。
+        default fallback すると default Guildmaster が registry 無 target を
+        kill できる cross-guild bypass の窓になるため、明示的に unknown 扱い。
+        """
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        # target は Mindspace のみで registry エントリ無
+        d = self.home / "minds" / "stray"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".mind-meta.md").write_text(
+            "---\nmind_name: stray\nkind: generic\npersona: implementer\n"
+            "guild: default\n---\n",
+            encoding="utf-8",
+        )
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "gm", "target_mind": "stray"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertIsNone(out.get("target_guild"))
+        self.assertIn("registry", out.get("error", "").lower())
+
+
+@unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
 class TestRegistryAuthoritativeNotMindspace(unittest.TestCase):
     """Codex P1 (#91) 回帰防止: Mindspace 内 `.mind-meta.md` を改ざんしても
     axiom 強制を bypass できないことを検証する。authoritative source は
@@ -544,6 +675,21 @@ class TestRegistryAuthoritativeNotMindspace(unittest.TestCase):
         self.assertFalse(out.get("ok"), out)
         self.assertEqual(out.get("code"), "forbidden")
         self.assertEqual(out.get("requester_persona"), "designer")
+
+    def test_forged_mindspace_persona_cannot_bypass_kill_mind_axiom(self) -> None:
+        """Phase 5c-3: 同上を kill_mind 経路でも検証。Mindspace 内
+        `.mind-meta.md` で persona=guildmaster を僭称しても、registry 側の真値
+        (= designer) を見るので kill_mind は forbidden で reject される。"""
+        self._spawn_designer_with_forged_mindspace("attacker", "default")
+        _write_mind_meta(self.home, "victim", guild="default", persona="implementer")
+        out = self._call(
+            "kill_mind",
+            {"mind_name": "attacker", "target_mind": "victim"},
+        )
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+        self.assertEqual(out.get("requester_persona"), "designer")
+        self.assertIn("guildmaster-only-kill", out.get("error", ""))
 
 
 if __name__ == "__main__":
