@@ -551,6 +551,17 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                     }
                 else:
                     try:
+                        # Windows JP locale (cp932) で subprocess output に
+                        # 非 ASCII byte (日本語メッセージ等) が混じると
+                        # capture_output + text=True のデフォルト codec
+                        # (locale.getpreferredencoding = cp932) で
+                        # UnicodeDecodeError → reader thread 死亡 → stdout
+                        # が None になり、後段の `proc.stdout[-500:]` で
+                        # 'NoneType' object is not subscriptable で result
+                        # が「実 spawn 成功なのに ok=false」を返す不整合に
+                        # なる (2026-05-26 dogfooding で実機検出)。
+                        # encoding="utf-8" を明示し、念のため errors="replace"
+                        # で decode 不能 byte は U+FFFD に置換して落とさない。
                         proc = subprocess.run(
                             [
                                 "bash", str(spawn_sh),
@@ -559,12 +570,19 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                             ],
                             capture_output=True,
                             text=True,
-                            timeout=30,
+                            encoding="utf-8",
+                            errors="replace",
+                            # Windows + bash + multiple Python child processes
+                            # (registry.py check / guild.py validate) で 15s
+                            # 程度かかる場合がある。30s は dogfooding 環境で
+                            # margin 不足のため 60s に拡大 (Windows 上での
+                            # spawn-mind 実測 ~15s)。
+                            timeout=60,
                         )
                     except subprocess.TimeoutExpired:
                         result = {
                             "ok": False,
-                            "error": "spawn-mind.sh timed out (30s)",
+                            "error": "spawn-mind.sh timed out (60s)",
                             "code": "internal_error",
                         }
                     else:
@@ -685,16 +703,24 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                         }
                     else:
                         try:
+                            # spawn_mind と同じく encoding="utf-8" を明示。
+                            # 現在の kill-mind.sh は output が偶然全 ASCII
+                            # なので問題は出ていないが、将来日本語メッセージ
+                            # が混入したら spawn_mind と同じ症状になる
+                            # (dogfooding 2026-05-26 で spawn_mind 側を実機検出、
+                            # 予防的に kill_mind も同時に修正)。
                             proc = subprocess.run(
                                 ["bash", str(kill_sh), target_mind],
                                 capture_output=True,
                                 text=True,
-                                timeout=30,
+                                encoding="utf-8",
+                                errors="replace",
+                                timeout=60,
                             )
                         except subprocess.TimeoutExpired:
                             result = {
                                 "ok": False,
-                                "error": "kill-mind.sh timed out (30s)",
+                                "error": "kill-mind.sh timed out (60s)",
                                 "code": "internal_error",
                             }
                         else:
