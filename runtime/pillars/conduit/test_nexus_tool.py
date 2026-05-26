@@ -692,5 +692,117 @@ class TestRegistryAuthoritativeNotMindspace(unittest.TestCase):
         self.assertIn("guildmaster-only-kill", out.get("error", ""))
 
 
+@unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
+class TestMindScopeObservationTools(unittest.TestCase):
+    """Phase 5d-3 (#68 / ADR-0017): Mind 向け Observation MCP tool 3 個の
+    identity binding + scope filter を検証する。
+
+    本 class は AI_ORG_OS_MIND_NAME を **bound** にして、identity binding が
+    効いた状態でテストする (他クラスは unbound で multi-mind を扱うため
+    対比的に bound)。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+        # identity を alice に bind
+        self._old_bound = os.environ.get("AI_ORG_OS_MIND_NAME")
+        os.environ["AI_ORG_OS_MIND_NAME"] = "alice"
+        for mod in (
+            "nexus", "inbox", "guild", "storage",
+            "mind_scope", "dispatch_flow", "observe", "resource_usage",
+            "anomaly",
+        ):
+            sys.modules.pop(mod, None)
+        self.nexus = importlib.import_module("nexus")
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        if self._old_bound is None:
+            os.environ.pop("AI_ORG_OS_MIND_NAME", None)
+        else:
+            os.environ["AI_ORG_OS_MIND_NAME"] = self._old_bound
+        self.tmp.cleanup()
+        for mod in (
+            "nexus", "inbox", "guild", "storage",
+            "mind_scope", "dispatch_flow", "observe", "resource_usage",
+            "anomaly",
+        ):
+            sys.modules.pop(mod, None)
+
+    def _call(self, name: str, args: dict) -> dict:
+        result = asyncio.run(self.nexus.call_tool(name, args))
+        return json.loads(result[0].text)
+
+    def _mk_two_minds(self) -> None:
+        _write_mind_meta(self.home, "alice", guild="default")
+        _write_mind_meta(self.home, "bob", guild="default")
+
+    def test_observe_self_returns_caller_only(self) -> None:
+        self._mk_two_minds()
+        out = self._call("observe_self", {"mind_name": "alice"})
+        self.assertTrue(out.get("ok"), out)
+        self.assertEqual(out.get("mind_name"), "alice")
+        self.assertNotIn("bob", json.dumps(out))
+
+    def test_observe_self_identity_binding_rejects_impersonation(self) -> None:
+        """bound 状態で他 Mind を名乗ろうとすると forbidden (ADR-0008)。"""
+        self._mk_two_minds()
+        out = self._call("observe_self", {"mind_name": "bob"})
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+
+    def test_observe_my_dispatches_filters_other_minds(self) -> None:
+        self._mk_two_minds()
+        _write_mind_meta(self.home, "carol", guild="default")
+        # alice -> bob
+        from storage import Nexus as _NexusCls  # noqa: PLC0415
+        storage_dir = self.home / "conduit-storage"
+        unbound = _NexusCls(storage_dir=storage_dir, identity=None)
+        unbound.send_dispatch(
+            from_mind="alice", to_mind="bob", topic="hi", body="x",
+        )
+        # bob -> carol (alice には見えてはいけない)
+        unbound.send_dispatch(
+            from_mind="bob", to_mind="carol", topic="hi", body="x",
+        )
+        out = self._call("observe_my_dispatches", {"mind_name": "alice"})
+        self.assertTrue(out.get("ok"), out)
+        # outbound: alice -> bob のみ
+        self.assertEqual(len(out["outbound"]), 1)
+        self.assertEqual(out["outbound"][0]["to"], "bob")
+        # carol は **どこにも出ない**
+        self.assertNotIn("carol", json.dumps(out))
+
+    def test_observe_my_dispatches_identity_binding(self) -> None:
+        self._mk_two_minds()
+        out = self._call("observe_my_dispatches", {"mind_name": "bob"})
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+
+    def test_observe_my_guild_returns_own_guild_rollup(self) -> None:
+        self._mk_two_minds()
+        _write_mind_meta(self.home, "carol", guild="research")  # 他 Guild
+        out = self._call("observe_my_guild", {"mind_name": "alice"})
+        self.assertTrue(out.get("ok"), out)
+        self.assertEqual(out.get("guild"), "default")
+        self.assertIn("alice", out["members"])
+        self.assertIn("bob", out["members"])
+        # 他 Guild の carol は含まれない
+        self.assertNotIn("carol", out["members"])
+        self.assertNotIn("carol", json.dumps(out))
+
+    def test_observe_my_guild_identity_binding(self) -> None:
+        self._mk_two_minds()
+        out = self._call("observe_my_guild", {"mind_name": "bob"})
+        self.assertFalse(out.get("ok"), out)
+        self.assertEqual(out.get("code"), "forbidden")
+
+
 if __name__ == "__main__":
     unittest.main()

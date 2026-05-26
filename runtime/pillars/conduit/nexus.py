@@ -55,6 +55,16 @@ from guild import (  # noqa: E402
     get_mind_guild as _get_mind_guild,
     is_guildmaster as _is_guildmaster,
 )
+# Phase 5d-3 (#68 / ADR-0017): Mind 向け観察 MCP tool。Observation Pillar の
+# Mind-scope wrapping を経由して Mind が自分自身 / 自 dispatch / 自 Guild を
+# 観察できるようにする。他 Mind / 他 Guild の情報は wrap 関数の戻り値で
+# 物理的に除外される。
+sys.path.insert(0, str(_RUNTIME_DIR / "pillars" / "observation"))
+from mind_scope import (  # noqa: E402
+    observe_self as _ms_observe_self,
+    observe_dispatches_for as _ms_observe_dispatches_for,
+    observe_guild_for as _ms_observe_guild_for,
+)
 
 # Identity binding (Issue #19, ADR-0008):
 #   When spawn-mind.sh launches this Nexus as a stdio subprocess for a single
@@ -235,6 +245,65 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["mind_name", "target_mind"],
+            },
+        ),
+        # Phase 5d-3 (#68 / ADR-0017): Mind 向け Observation MCP tool。
+        # Observation Pillar の Warden 内部 API を、Mind の自己観察スコープに
+        # 絞って公開する。返り値は wrap 関数で物理的に他 Mind / 他 Guild の
+        # 情報を含まないようフィルタされる。新規 axiom は不要 (identity
+        # binding ADR-0008 + 既存 claim-only-own-guild の思想で十分)。
+        Tool(
+            name="observe_self",
+            description=(
+                "Return your own Mind's observation snapshot (status / category / "
+                "unread / archive / mindspace size). No information about other "
+                "Minds is exposed. identity binding (ADR-0008) ensures mind_name "
+                "matches the caller in bound sessions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mind_name": {"type": "string", "description": "Your Mind name."},
+                },
+                "required": ["mind_name"],
+            },
+        ),
+        Tool(
+            name="observe_my_dispatches",
+            description=(
+                "Return dispatches where you appear as either sender (from) or "
+                "recipient (to). Dispatches between other Minds are filtered out. "
+                "Optional window_seconds limits to dispatches within the last N "
+                "seconds (default: all-time)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mind_name": {"type": "string", "description": "Your Mind name."},
+                    "window_seconds": {
+                        "type": "integer",
+                        "description": (
+                            "Optional time window in seconds. Omit for all-time."
+                        ),
+                    },
+                },
+                "required": ["mind_name"],
+            },
+        ),
+        Tool(
+            name="observe_my_guild",
+            description=(
+                "Return a rollup of your Guild: members, guildmasters, and pending "
+                "Issues belonging to your Guild. Other Guilds are not exposed. "
+                "Returns code='forbidden' if you have no registry entry "
+                "(same-guild boundary, mirroring claim-only-own-guild)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mind_name": {"type": "string", "description": "Your Mind name."},
+                },
+                "required": ["mind_name"],
             },
         ),
     ]
@@ -650,6 +719,34 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                                     "exit_code": proc.returncode,
                                     "stderr_tail": proc.stderr[-500:],
                                 }
+        elif name == "observe_self":
+            # Phase 5d-3 (#68): Mind 向け Observation tool。identity binding
+            # を assert した上で mind_scope.observe_self を呼ぶ。返り値は
+            # 1 Mind 分のみで、他 Mind の情報は含まれない (wrap 側の物理保証)。
+            mind_name = args["mind_name"]
+            _validate_mind_name(mind_name, "mind_name")
+            _nexus.assert_identity(mind_name)
+            result = _ms_observe_self(mind_name)
+        elif name == "observe_my_dispatches":
+            mind_name = args["mind_name"]
+            _validate_mind_name(mind_name, "mind_name")
+            _nexus.assert_identity(mind_name)
+            window = args.get("window_seconds")
+            if window is not None and not isinstance(window, int):
+                result = {
+                    "ok": False,
+                    "error": "window_seconds must be an integer",
+                    "code": "invalid_input",
+                }
+            else:
+                result = _ms_observe_dispatches_for(
+                    mind_name, window_seconds=window,
+                )
+        elif name == "observe_my_guild":
+            mind_name = args["mind_name"]
+            _validate_mind_name(mind_name, "mind_name")
+            _nexus.assert_identity(mind_name)
+            result = _ms_observe_guild_for(mind_name)
         else:
             result = {"ok": False, "error": f"unknown tool: {name}"}
     except KeyError as exc:

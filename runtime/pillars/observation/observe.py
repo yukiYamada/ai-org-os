@@ -15,6 +15,7 @@ Usage:
   python3 runtime/pillars/observation/observe.py --resource # per-mind + storage size (#66)
   python3 runtime/pillars/observation/observe.py --anomaly  # W1-W3 / I1-I2 signals (#67)
   python3 runtime/pillars/observation/observe.py --diff <prev> --against <curr>  # snapshot diff (#67)
+  python3 runtime/pillars/observation/observe.py --for-warden  # integrated JSON (snapshot+flow+resource+anomaly, #68)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
@@ -506,10 +507,32 @@ def main(argv: list[str] | None = None) -> int:
     as_flow = "--flow" in argv
     as_resource = "--resource" in argv
     as_anomaly = "--anomaly" in argv
+    as_for_warden = "--for-warden" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
 
     now_epoch = time.time()
+
+    # Phase 5d-3 (#68): --for-warden は履歴 / dispatch / resource / anomaly を
+    # schema_version 付きの 1 つの JSON にまとめる。Mind 向けではなく Warden
+    # 内部 / 人間運用者向けの **無制約観察** payload。
+    if as_for_warden:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from mind_scope import build_realm_report  # noqa: PLC0415
+
+        threshold = None
+        if "--inbox-threshold" in argv:
+            threshold = _parse_int_option(argv, "--inbox-threshold", 10)
+        w1_window = None
+        if "--w1-window" in argv:
+            w1_window = _parse_int_option(argv, "--w1-window", 3600)
+        payload = build_realm_report(
+            inbox_threshold=threshold,
+            w1_window_seconds=w1_window,
+            now_epoch=now_epoch,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
 
     # Phase 5d-2 (#67): anomaly / snapshot diff。--anomaly と --diff は
     # 各々独立した小さなビュー。--anomaly は --prev-snapshot/--curr-snapshot
