@@ -106,6 +106,25 @@ if [ -f "${PID_FILE}" ]; then
   fi
 fi
 
-echo "[kill-mind] Destroying Mind '${MIND_NAME}' (Mindspace at ${MIND_DIR})"
+# Phase 5c-2 P1/P2 fix (#91 Codex): registry を先に消す。
+# registry が authoritative source (persona / guild) なので、先に invalidate
+# する。順序を逆にすると、削除途中で中断された場合 (signal / crash / forced
+# stop) に Mindspace は無いが registry は残る = 「registry あり = 生きてる」
+# と axiom check が判定する一方 Mindspace 不在で Dispatch が受け取れない、
+# という stale "live" mind が出来てしまう。
+# 「registry 先消し」によって中断時は registry 無 → 即 forbidden (#91 2 回目
+# 修正と整合) となり、Mindspace 残骸があっても axiom 上は安全側に倒れる。
+REGISTRY_ENTRY="${RUNTIME_HOME}/registry/minds/${MIND_NAME}.md"
+if [ -f "${REGISTRY_ENTRY}" ]; then
+  if ! rm -f "${REGISTRY_ENTRY}"; then
+    echo "[ERROR] Failed to remove registry entry ${REGISTRY_ENTRY}; aborting kill" >&2
+    echo "[HINT] Mindspace is still intact at ${MIND_DIR}" >&2
+    exit 5
+  fi
+  echo "[kill-mind] Removed registry entry (authoritative): ${REGISTRY_ENTRY}"
+fi
+
+echo "[kill-mind] Destroying Mindspace at ${MIND_DIR}"
 rm -rf "${MIND_DIR}"
+
 echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace is irrecoverable."

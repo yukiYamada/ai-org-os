@@ -157,6 +157,13 @@ if echo "${realm_out}" | grep -qE "default: .* pending=1"; then
 else
   assert "--realm: default Guild pending=1 matches Inbox queue" 0
 fi
+# Phase 5c-2 (ADR-0021): Guildmaster の在/不在が表示されること。
+# テスト環境では Guildmaster Mind を作っていないので (none)。
+if echo "${realm_out}" | grep -qE "guildmaster=\[\(none\)\]"; then
+  assert "--realm: default Guild guildmaster=(none)" 1
+else
+  assert "--realm: default Guild guildmaster=(none)" 0
+fi
 
 echo ""
 echo "[summary] passed: ${PASS}, failed: ${FAIL}"

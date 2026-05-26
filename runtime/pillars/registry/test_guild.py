@@ -6,7 +6,9 @@ Standard library only (unittest + tempfile). Each test fabricates a temporary
 templates/guilds/ and $AI_ORG_OS_HOME/minds/.
 
 設計の根拠:
-- ADR-0019 §1: members は派生情報。authoritative source は .mind-meta.md。
+- ADR-0019 §1 + Phase 5c-2 P1 fix (#91): members は派生情報。authoritative
+  source は **Mind registry** (`$AI_ORG_OS_HOME/registry/minds/<name>.md`)
+  であり、Mindspace 内 `.mind-meta.md` ではない (caller-writable 排除)。
 - ADR-0019 §3: axiom v0.1 = claim-only-own-guild。
 """
 
@@ -79,26 +81,30 @@ def _write_manifest(
 
 
 def _write_mind_meta(
-    minds_dir: Path,
+    registry_dir: Path,
     mind_name: str,
     *,
     guild: str | None = "default",
+    persona: str = "designer",
 ) -> Path:
-    """Helper: write `<minds_dir>/<mind_name>/.mind-meta.md`. `guild=None`
-    omits the field entirely (back-compat case)."""
-    dir_path = minds_dir / mind_name
-    dir_path.mkdir(parents=True, exist_ok=True)
+    """Helper: write `<registry_dir>/<mind_name>.md`.
+
+    Phase 5c-2 P1 fix (#91): authoritative source は Mind registry。引数名
+    `registry_dir` で意味を明示する (旧名 minds_dir からの改名)。`guild=None`
+    omits the field entirely (back-compat case)。
+    """
+    registry_dir.mkdir(parents=True, exist_ok=True)
     lines = [
         "---",
         f"mind_name: {mind_name}",
         "kind: generic",
-        "persona: designer",
+        f"persona: {persona}",
     ]
     if guild is not None:
         lines.append(f"guild: {guild}")
     lines.append("---")
     lines.append("")
-    path = dir_path / ".mind-meta.md"
+    path = registry_dir / f"{mind_name}.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -324,31 +330,29 @@ class TestGetMindGuild(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "m1", guild="backend")
-            self.assertEqual(get_mind_guild("m1", minds_dir=minds), "backend")
+            self.assertEqual(get_mind_guild("m1", registry_dir=minds), "backend")
 
-    def test_missing_meta_defaults_to_default(self) -> None:
+    def test_missing_registry_entry_returns_none(self) -> None:
+        """Codex P1 (#91 2 回目): registry エントリ無は None。default に
+        fallback すると Guild 隔離が破れる (default Guildmaster による越境観察
+        が通ってしまう)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
-            self.assertEqual(
-                get_mind_guild("ghost", minds_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("ghost", registry_dir=minds))
 
-    def test_meta_without_guild_field_defaults(self) -> None:
-        # Phase 5c-1 以前に生成された Mind との後方互換
+    def test_registry_without_guild_field_returns_none(self) -> None:
+        """registry エントリは在るが guild フィールド無は None。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "old", guild=None)
-            self.assertEqual(
-                get_mind_guild("old", minds_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("old", registry_dir=minds))
 
-    def test_meta_with_empty_guild_defaults(self) -> None:
+    def test_registry_with_empty_guild_returns_none(self) -> None:
+        """空文字列も None 扱い (= 未設定と同じ、forbidden の入口に揃える)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "m1", guild="")
-            self.assertEqual(
-                get_mind_guild("m1", minds_dir=minds), DEFAULT_GUILD
-            )
+            self.assertIsNone(get_mind_guild("m1", registry_dir=minds))
 
 
 class TestEnumerateMembers(unittest.TestCase):
@@ -359,35 +363,39 @@ class TestEnumerateMembers(unittest.TestCase):
             _write_mind_meta(minds, "b", guild="backend")
             _write_mind_meta(minds, "c", guild="default")
             self.assertEqual(
-                enumerate_members("default", minds_dir=minds), ["a", "c"]
+                enumerate_members("default", registry_dir=minds), ["a", "c"]
             )
             self.assertEqual(
-                enumerate_members("backend", minds_dir=minds), ["b"]
+                enumerate_members("backend", registry_dir=minds), ["b"]
             )
 
     def test_missing_dir_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(
-                enumerate_members("default", minds_dir=Path(td) / "nope"),
+                enumerate_members("default", registry_dir=Path(td) / "nope"),
                 [],
             )
 
-    def test_skips_dirs_without_meta(self) -> None:
+    def test_skips_non_md_entries(self) -> None:
+        """registry dir 内に .md でない file / dir があれば無視する
+        (registry は <name>.md のフラットファイル構造)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             (minds / "no-meta").mkdir()
+            (minds / "stray.txt").write_text("not registry", encoding="utf-8")
             _write_mind_meta(minds, "real", guild="default")
             self.assertEqual(
-                enumerate_members("default", minds_dir=minds), ["real"]
+                enumerate_members("default", registry_dir=minds), ["real"]
             )
 
-    def test_meta_without_guild_field_counted_as_default(self) -> None:
-        # 旧 Mind は guild: フィールドが無くても default Guild の member。
+    def test_registry_without_guild_field_not_counted(self) -> None:
+        """Codex P1 (#91 2 回目): guild フィールド欠落の entry は default に
+        勝手に分類しない。member 集計からも除外する (越境観察の入口を塞ぐ)。"""
         with tempfile.TemporaryDirectory() as td:
             minds = Path(td)
             _write_mind_meta(minds, "old", guild=None)
             self.assertEqual(
-                enumerate_members("default", minds_dir=minds), ["old"]
+                enumerate_members("default", registry_dir=minds), []
             )
 
 
@@ -576,14 +584,14 @@ class TestCli(unittest.TestCase):
             self.assertEqual(code, 3)
 
     def test_members_subcommand(self) -> None:
-        # members CLI は env override (AI_ORG_OS_HOME) で minds dir を指せる
+        # members CLI は env override (AI_ORG_OS_HOME) で registry dir を指せる。
+        # Phase 5c-2 P1 fix (#91): registry path = <home>/registry/minds/
         import os as _os
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            minds = base / "minds"
-            minds.mkdir()
-            _write_mind_meta(minds, "alice", guild="default")
-            _write_mind_meta(minds, "bob", guild="default")
+            registry_minds = base / "registry" / "minds"
+            _write_mind_meta(registry_minds, "alice", guild="default")
+            _write_mind_meta(registry_minds, "bob", guild="default")
             old = _os.environ.get("AI_ORG_OS_HOME")
             _os.environ["AI_ORG_OS_HOME"] = str(base)
             try:

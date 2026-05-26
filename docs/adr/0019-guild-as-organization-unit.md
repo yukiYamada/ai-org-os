@@ -78,9 +78,11 @@ Guild ディレクトリには **immutable な定義のみ** を置く (`manifes
 - **ユーザー定義 Guild** は `$AI_ORG_OS_HOME/guilds/<name>/` に置く (Phase 5c-1 で実装、ADR-0018 / ADR-0020 整合)
 - Guild ディレクトリは **そのまま `cp -r` / `git clone` で配布可能**: 受け取った人は `$AI_ORG_OS_HOME/guilds/<name>/` に配置すれば動く (本 ADR の「組織パッケージ」概念の物理表現)
 
-#### Membership は派生状態（authoritative source は `.mind-meta.md`）
+#### Membership は派生状態（authoritative source は Mind registry）
 
-「現在その Guild に何の Mind が所属しているか」は `members.md` のような **authoritative ファイルを持たない**。所属の真実は `$AI_ORG_OS_HOME/minds/<name>/.mind-meta.md` の `guild:` フィールドであり、Guild の member 一覧は全 Mind の `.mind-meta.md` を走査して **集約する** (observe.py / claim_issue 内で都度算出)。
+> **2026-05-25 更新 (Phase 5c-2 P1 fix #91 Codex)**: 当初 authoritative source を `$AI_ORG_OS_HOME/minds/<name>/.mind-meta.md` の `guild:` フィールドとしていたが、これは Mind 自身の Mindspace 配下で **Mind が書き換え可能** だったため、caller-controlled flag による権限昇格 (axiom bypass) を許す穴になっていた。authoritative source を **`$AI_ORG_OS_HOME/registry/minds/<name>.md`** (Pillar 管理領域、ADR-0011 で Mind 不可侵) に移した。Mindspace 内 `.mind-meta.md` は informational copy として残るが、authz の根拠としては参照しない。
+
+「現在その Guild に何の Mind が所属しているか」は `members.md` のような **authoritative ファイルを持たない**。所属の真実は **`$AI_ORG_OS_HOME/registry/minds/<name>.md`** の `guild:` フィールドであり、Guild の member 一覧は registry を走査して **集約する** (observe.py / claim_issue / nexus.py の axiom 強制で都度算出)。registry の書き換えは spawn-mind.sh / kill-mind.sh のみが行う (Pillar 管理)。
 
 理由:
 - ADR-0018 整合: framework (repo) には mutable state を置けない

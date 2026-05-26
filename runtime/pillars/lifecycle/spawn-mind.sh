@@ -251,24 +251,60 @@ mkdir -p "${MIND_DIR}"
 echo "[spawn-mind] Installing Persona '${PERSONA}' as CLAUDE.md"
 cp "${PERSONA_FILE}" "${MIND_DIR}/CLAUDE.md"
 
+SPAWNED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
 cat > "${MIND_DIR}/.mind-meta.md" <<EOF
 ---
 mind_name: ${MIND_NAME}
 kind: ${KIND}
 persona: ${PERSONA}
 guild: ${GUILD}
-spawned_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+spawned_at: ${SPAWNED_AT}
 phase: 1+3
 ---
 
 # Mind metadata
 
-このファイルは暫定的なメタデータです。
-Phase 5 以降は Warden がより構造化された形で管理します。
+> Phase 5c-2 P1 fix (#91): 本ファイルは Mind 自身が読み書きできる informational
+> copy です。authz の根拠 (persona / guild の authoritative source) は
+> \$AI_ORG_OS_HOME/registry/minds/${MIND_NAME}.md にあります。
+> 本ファイルを書き換えても axiom 強制には影響しません (caller-controlled
+> flag による権限昇格の防止)。
 
 guild フィールドは Phase 5c-1 (ADR-0019) で追加。
-所属 Guild の authoritative source として nexus.py の claim_issue で参照される。
 EOF
+
+# Phase 5c-2 P1 fix (#91 Codex): Mind の persona / guild の authoritative
+# source は **Mindspace の外** (\$AI_ORG_OS_HOME/registry/minds/<name>.md) に
+# 置く。Mindspace 内 .mind-meta.md は Mind が書き換え可能なため authz の
+# 根拠にできない (権限昇格防止)。registry は Pillar 管理領域。
+REGISTRY_MINDS_DIR="${RUNTIME_HOME}/registry/minds"
+mkdir -p "${REGISTRY_MINDS_DIR}"
+REGISTRY_ENTRY="${REGISTRY_MINDS_DIR}/${MIND_NAME}.md"
+REGISTRY_TMP="${REGISTRY_ENTRY}.tmp.$$"
+
+# atomic write: tmp に書いて rename。並行 spawn でも entry が中途半端な
+# 状態で観測されないように。
+cat > "${REGISTRY_TMP}" <<EOF
+---
+mind_name: ${MIND_NAME}
+kind: ${KIND}
+persona: ${PERSONA}
+guild: ${GUILD}
+spawned_at: ${SPAWNED_AT}
+---
+
+# Mind registry entry (authoritative)
+
+Pillar 管理領域。Mind 自身は書き換えてはならない (ADR-0011)。spawn-mind.sh /
+kill-mind.sh のみが本ファイルを書き換える。
+
+このファイルが axiom 強制 (guildmaster-only-spawn / claim-only-own-guild /
+read-others-inbox-only-by-guildmaster) の根拠データとして nexus.py から
+参照される。
+EOF
+mv "${REGISTRY_TMP}" "${REGISTRY_ENTRY}"
+echo "[spawn-mind] Mind registry entry: ${REGISTRY_ENTRY}"
 
 # Phase 3 + 5b-3: Nexus (MCP server) への接続設定を Mindspace に配置。
 # Claude Code は .mcp.json を読んで MCP サーバーに接続する（stdio）。

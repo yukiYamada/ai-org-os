@@ -67,9 +67,25 @@ if [ ! -d "${mind_dir}" ]; then
   FAIL_MSGS+=("setup: spawn failed before kill test")
   echo "  [NG]   setup: spawn failed"
 else
+  registry_entry="${AI_ORG_OS_HOME}/registry/minds/${mind}.md"
+  # 前提: spawn-mind が registry にも書いてる
+  if [ ! -f "${registry_entry}" ]; then
+    FAIL=$((FAIL + 1))
+    FAIL_MSGS+=("setup: registry entry was not created by spawn-mind")
+    echo "  [NG]   setup: registry entry missing before kill"
+  fi
   set +e; "${KILL}" "${mind}" >/dev/null 2>&1; code=$?; set -e
   assert_exit_code "happy kill" 0 "${code}"
   assert_dir_absent "Mindspace gone" "${mind_dir}"
+  # Phase 5c-2 P1 fix (#91): kill-mind は registry エントリも削除する。
+  if [ ! -f "${registry_entry}" ]; then
+    PASS=$((PASS + 1))
+    echo "  [ok]   registry entry removed (authoritative cleanup)"
+  else
+    FAIL=$((FAIL + 1))
+    FAIL_MSGS+=("kill-mind left registry entry behind: ${registry_entry}")
+    echo "  [NG]   registry entry not removed"
+  fi
 fi
 
 echo ""
