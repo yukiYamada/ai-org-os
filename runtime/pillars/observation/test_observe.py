@@ -11,6 +11,7 @@ raise するように差し替える。
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -93,6 +94,78 @@ class TestFormatRealmViewInboxFailure(unittest.TestCase):
         self.assertIn("pending=0", out)
         self.assertNotIn("pending=?", out)
         self.assertNotIn("pending counts unknown", out)
+
+
+class TestResourceMindSetConsistency(unittest.TestCase):
+    """Codex P2 (#93): `--resource` (table) と `--resource --json` が同じ
+    Mind 集合を返すことを検証する。
+
+    旧実装は JSON 側が `all_usage()` (= `minds/` 配下の **valid 名前** dir
+    すべて) を駆動軸にしていたため、`.mind-meta.md` が無い「中途状態」
+    dir も JSON にだけ現れる不整合があった。修正後は両者とも
+    `gather_observations()` 由来の Mind だけを報告する。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    def _mk_mind(self, name: str, *, with_meta: bool) -> None:
+        d = self.home / "minds" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "filler.txt").write_text("x" * 10, encoding="utf-8")
+        if with_meta:
+            (d / ".mind-meta.md").write_text(
+                f"---\nmind_name: {name}\nkind: generic\n"
+                f"persona: designer\nguild: default\n"
+                f"spawned_at: 2026-05-26T00:00:00Z\n---\n",
+                encoding="utf-8",
+            )
+
+    def test_json_and_table_report_same_mind_set(self) -> None:
+        """spawned Mind (alice) と「dir だけある」half-baked dir (stray) を
+        両方置く。--resource と --resource --json の Mind 集合は一致するべき。
+        """
+        self._mk_mind("alice", with_meta=True)
+        self._mk_mind("stray", with_meta=False)  # 中途半端 dir
+
+        from io import StringIO  # noqa: PLC0415
+        from contextlib import redirect_stdout, redirect_stderr  # noqa: PLC0415
+
+        # --resource (table)
+        buf_table = StringIO()
+        with redirect_stdout(buf_table), redirect_stderr(StringIO()):
+            observe.main(["--resource"])
+        table_out = buf_table.getvalue()
+        self.assertIn("alice", table_out)
+        # half-baked dir は table に出ない (gather_observations が
+        # .mind-meta.md 必須としているため)
+        # NOTE: "stray" は category 行などに混入しない厳しめ検査だが、
+        # 文字列マッチで十分 (テーブルの NAME 列に出現しないこと)。
+        self.assertNotIn("stray", table_out)
+
+        # --resource --json
+        buf_json = StringIO()
+        with redirect_stdout(buf_json), redirect_stderr(StringIO()):
+            observe.main(["--resource", "--json"])
+        json_payload = json.loads(buf_json.getvalue())
+        json_mindspaces = sorted(
+            b["name"] for b in json_payload if b["category"] == "mindspace"
+        )
+        # spawned mind だけ。stray は JSON にも出ないこと。
+        self.assertEqual(json_mindspaces, ["alice"])
+        # 末尾の conduit-storage バケットは別 category で 1 件揃う
+        categories = [b["category"] for b in json_payload]
+        self.assertEqual(categories.count("conduit-storage"), 1)
 
 
 if __name__ == "__main__":

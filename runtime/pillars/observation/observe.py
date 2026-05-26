@@ -547,17 +547,38 @@ def main(argv: list[str] | None = None) -> int:
     elif as_resource:
         # Phase 5d-1 (#66): 既存 mind table を拡張し、BYTES / FILES 列 + 末尾に
         # Conduit storage バケットを併記。--json と組み合わせた場合は
-        # resource_usage の JSON 形式を採用 (Mind table の JSON 化は別途)。
+        # 同じ「spawned mind 集合」(.mind-meta.md 持ち) を JSON で出す。
+        # Codex P2 (#93): 旧実装は all_usage() を呼んでいたため `minds/`
+        # 配下の dir 名規則を満たす全ディレクトリを集計に含めてしまい、
+        # table 側の gather_observations() ベース (= .mind-meta.md 必須) と
+        # Mind 集合が乖離する不整合があった。observations を共通の駆動軸に
+        # することで「`--resource` と `--resource --json` が同じ Mind を
+        # 報告する」性質を実装上で保証する。
         if as_json:
             sys.path.insert(0, str(Path(__file__).parent))
             from resource_usage import (  # noqa: PLC0415
-                all_usage,
+                UsageBucket,
+                _scan_dir_size,
+                conduit_storage_usage,
                 usage_to_json,
             )
 
+            buckets: list[UsageBucket] = []
+            for obs, _, _ in observations:
+                mind_dir = _minds_dir() / obs.mind_name
+                files, byte_count = _scan_dir_size(mind_dir)
+                buckets.append(
+                    UsageBucket(
+                        name=obs.mind_name,
+                        category="mindspace",
+                        file_count=files,
+                        byte_count=byte_count,
+                    )
+                )
+            buckets.append(conduit_storage_usage())
             print(
                 json.dumps(
-                    usage_to_json(all_usage()), ensure_ascii=False, indent=2
+                    usage_to_json(buckets), ensure_ascii=False, indent=2
                 )
             )
         else:

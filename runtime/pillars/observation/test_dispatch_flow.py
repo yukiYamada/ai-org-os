@@ -147,6 +147,46 @@ class TestParseDispatchFrontmatter(unittest.TestCase):
         missing = self.dir / "does-not-exist.md"
         self.assertIsNone(self._silent(df.parse_dispatch_frontmatter, missing))
 
+    def test_non_utf8_file_skipped_without_crashing(self) -> None:
+        """Codex P1 (#93): 非 UTF-8 file は readline() で UnicodeDecodeError
+        を上げる。「skip して継続」の契約を守るため、None を返して走査全体は
+        止まらない。
+        """
+        path = self.dir / "binary.md"
+        # 0x80 単独は invalid UTF-8 continuation byte。frontmatter 内に
+        # 混入させて parser が落ちないことを確認する (本文だけ non-UTF-8
+        # でも readline がそこに到達する前に落ちる可能性がある)。
+        path.write_bytes(
+            b"---\nfrom: alice\nbroken: \x80\x81\xff\n"
+            b"to: bob\ndispatched_at: 2026-05-26T10:00:00Z\n"
+            b"---\nbody\n"
+        )
+        # 例外で落ちず、None を返すこと
+        self.assertIsNone(self._silent(df.parse_dispatch_frontmatter, path))
+
+    def test_non_utf8_anywhere_skips_file_without_crashing_aggregate(self) -> None:
+        """Codex P1 (#93): 本文に invalid byte があっても aggregate_flow 全体は
+        中断しない (1 件 skip するだけ)。Python の text IO はバッファ先読みで
+        本文 byte も decode 対象になるため、frontmatter のみ semantic に読む
+        設計でも非 UTF-8 byte は parse 失敗で None 返却 → 集計から除外、と
+        いう挙動になる。重要なのは「走査全体が落ちない」性質。
+        """
+        # 健全な 1 件
+        _write_dispatch(self.dir, "inbox", "bob", "m1", sender="alice")
+        # 壊れた 1 件 (本文に \x80)
+        rec = self.dir / "inbox" / "bob"
+        (rec / "broken.md").write_bytes(
+            b"---\nfrom: carol\nto: bob\n"
+            b"dispatched_at: 2026-05-26T10:00:00Z\nmsg_id: broken\n---\n"
+            b"body with invalid byte: \x80 here\n"
+        )
+        with redirect_stderr(io.StringIO()):
+            edges = df.aggregate_flow(self.dir)
+        # 健全な alice→bob 1 件のみ集計、broken は skip
+        self.assertEqual(len(edges), 1)
+        self.assertEqual((edges[0].from_mind, edges[0].to_mind), ("alice", "bob"))
+        self.assertEqual(edges[0].count, 1)
+
 
 class TestAggregateFlow(unittest.TestCase):
     """aggregate_flow の集計挙動。"""

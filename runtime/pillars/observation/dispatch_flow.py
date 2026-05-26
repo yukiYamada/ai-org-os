@@ -126,6 +126,19 @@ def parse_dispatch_frontmatter(path: Path) -> dict[str, str] | None:
             file=sys.stderr,
         )
         return None
+    except UnicodeDecodeError as exc:
+        # Codex P1 (#93): 非 UTF-8 file が混入していた場合、readline() が
+        # UnicodeDecodeError を上げる。OSError のみ catch していると 1 件の
+        # 壊れた file が `observe.py --flow` 全体を落とす。本モジュールの
+        # 契約 (「ill-formed file は skip して継続」) を守るため明示的に
+        # catch して None を返す。frontmatter が UTF-8 でない時点で
+        # dispatch-format.md の契約違反 (本文だけが non-UTF-8 でも、本文に
+        # 到達する前に frontmatter 読み取り中の readline で発生しうる)。
+        print(
+            f"[WARN] dispatch_flow: decode error at {path}: {exc}",
+            file=sys.stderr,
+        )
+        return None
     finally:
         f.close()
 
