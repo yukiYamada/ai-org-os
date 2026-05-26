@@ -13,6 +13,8 @@ Usage:
   python3 runtime/pillars/observation/observe.py --realm    # integrated view (#71)
   python3 runtime/pillars/observation/observe.py --flow     # dispatch flow summary (#66)
   python3 runtime/pillars/observation/observe.py --resource # per-mind + storage size (#66)
+  python3 runtime/pillars/observation/observe.py --anomaly  # W1-W3 / I1-I2 signals (#67)
+  python3 runtime/pillars/observation/observe.py --diff <prev> --against <curr>  # snapshot diff (#67)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
@@ -484,6 +486,17 @@ def _format_realm_view(observations: list[tuple[MindObservation, str, str]]) -> 
     return "\n".join(sections)
 
 
+def _parse_path_option(argv: list[str], name: str) -> Path | None:
+    """`--name PATH` 解析 (`--snapshot` などと同じ流儀)。未指定は None。"""
+    if name not in argv:
+        return None
+    idx = argv.index(name)
+    if idx + 1 >= len(argv):
+        print(f"[ERROR] {name} requires a path argument", file=sys.stderr)
+        raise SystemExit(2)
+    return Path(argv[idx + 1])
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     as_json = "--json" in argv
@@ -492,8 +505,113 @@ def main(argv: list[str] | None = None) -> int:
     as_realm = "--realm" in argv
     as_flow = "--flow" in argv
     as_resource = "--resource" in argv
+    as_anomaly = "--anomaly" in argv
+    diff_a = _parse_path_option(argv, "--diff")
+    diff_b = _parse_path_option(argv, "--against")
 
     now_epoch = time.time()
+
+    # Phase 5d-2 (#67): anomaly / snapshot diff。--anomaly と --diff は
+    # 各々独立した小さなビュー。--anomaly は --prev-snapshot/--curr-snapshot
+    # を併用すると I1 (stale 遷移) も含めて出す。
+    if as_anomaly:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from anomaly import (  # noqa: PLC0415
+            DEFAULT_INBOX_BUILDUP_THRESHOLD,
+            DEFAULT_W1_WINDOW_SECONDS,
+            detect_all,
+            format_signals_table,
+            signals_to_json,
+        )
+
+        prev_path = _parse_path_option(argv, "--prev-snapshot")
+        curr_path = _parse_path_option(argv, "--curr-snapshot")
+        prev_payload = None
+        curr_payload = None
+        if prev_path and curr_path:
+            from snapshot import load_snapshot  # noqa: PLC0415
+
+            prev_payload = load_snapshot(prev_path)
+            curr_payload = load_snapshot(curr_path)
+        threshold = _parse_int_option(
+            argv, "--inbox-threshold", DEFAULT_INBOX_BUILDUP_THRESHOLD
+        )
+        w1_window = _parse_int_option(
+            argv, "--w1-window", DEFAULT_W1_WINDOW_SECONDS
+        )
+        signals = detect_all(
+            prev_snapshot=prev_payload,
+            curr_snapshot=curr_payload,
+            inbox_threshold=threshold,
+            w1_window_seconds=w1_window,
+            now_epoch=now_epoch,
+        )
+        if as_json:
+            print(
+                json.dumps(
+                    signals_to_json(signals), ensure_ascii=False, indent=2
+                )
+            )
+        else:
+            print(format_signals_table(signals))
+        return 0
+
+    if diff_a and diff_b:
+        # --diff <prev> --against <curr> で snapshot 差分を出す。
+        # 一般的な diff (added/removed/changed) を返す観察用 view。
+        sys.path.insert(0, str(Path(__file__).parent))
+        from anomaly import diff_snapshots  # noqa: PLC0415
+        from snapshot import load_snapshot  # noqa: PLC0415
+
+        prev_payload = load_snapshot(diff_a)
+        curr_payload = load_snapshot(diff_b)
+        result = diff_snapshots(prev_payload, curr_payload)
+        if as_json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print("=== Snapshot Diff ===")
+            if result["added"]:
+                print(f"  added ({len(result['added'])}):")
+                for m in result["added"]:
+                    print(
+                        f"    + {m['mind_name']}  "
+                        f"category={m.get('category')}  status={m.get('status')}"
+                    )
+            if result["removed"]:
+                print(f"  removed ({len(result['removed'])}):")
+                for m in result["removed"]:
+                    print(
+                        f"    - {m['mind_name']}  "
+                        f"category={m.get('category')}  status={m.get('status')}"
+                    )
+            if result["changed"]:
+                print(f"  changed ({len(result['changed'])}):")
+                for m in result["changed"]:
+                    print(f"    ~ {m['mind_name']}")
+                    for k, (before, after) in m["fields"].items():
+                        print(f"        {k}: {before} -> {after}")
+            if not (result["added"] or result["removed"] or result["changed"]):
+                print("  (no changes)")
+        return 0
+
+    if diff_a and not diff_b:
+        print(
+            "[ERROR] --diff requires --against <curr-snapshot>",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Codex P2 (#94): 逆方向 (--against のみ) も明示的に reject する。
+    # 旧実装は --diff 無しの --against を黙って通して default observation
+    # view を出していたため、自動化スクリプトの引数ミスを検出できない不整合
+    # があった。両方無 → default view、両方有 → diff、片方のみ → error の
+    # 対称な三値判定にする。
+    if diff_b and not diff_a:
+        print(
+            "[ERROR] --against requires --diff <prev-snapshot>",
+            file=sys.stderr,
+        )
+        return 2
 
     # Phase 5d-1 (#66): dispatch フロー / リソース使用量。各々独立して
     # 動作する小さなビューなので、--realm より前に分岐する。
