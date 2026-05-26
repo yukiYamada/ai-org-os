@@ -10,9 +10,13 @@ Usage:
   python3 runtime/pillars/observation/observe.py --json     # machine-readable
   python3 runtime/pillars/observation/observe.py --snapshot # write JSON snapshot file
   python3 runtime/pillars/observation/observe.py --prune    # delete old snapshots (TTL days)
+  python3 runtime/pillars/observation/observe.py --realm    # integrated view (#71)
+  python3 runtime/pillars/observation/observe.py --flow     # dispatch flow summary (#66)
+  python3 runtime/pillars/observation/observe.py --resource # per-mind + storage size (#66)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
+v0.2 flow/resource details: pillars/conduit/dispatch-format.md と pillars/observation/dispatch_flow.py / resource_usage.py.
 """
 
 from __future__ import annotations
@@ -202,6 +206,97 @@ def _format_table(observations: list[tuple[MindObservation, str, str]]) -> str:
             f"{observation.mind_name:<20} {observation.kind:<10} "
             f"{observation.persona:<14} {status:<8} {category:<10} {ia}"
         )
+    return "\n".join(lines)
+
+
+def _format_table_with_resource(
+    observations: list[tuple[MindObservation, str, str]],
+) -> str:
+    """`_format_table` の拡張。BYTES / FILES カラムを追加し、末尾に
+    Conduit storage バケットを 1 行併記する (Phase 5d-1 / #66, --resource)。
+
+    Mind 名は既に観察済の dir 名なので、各 Mind の Mindspace サイズは
+    `resource_usage._scan_dir_size` で再計算する。ストレージ全体は
+    `resource_usage.conduit_storage_usage` を使う。
+    """
+    sys.path.insert(0, str(Path(__file__).parent))
+    from resource_usage import (  # noqa: PLC0415
+        _scan_dir_size,
+        conduit_storage_usage,
+        _human_bytes,
+    )
+
+    if not observations:
+        # Mind 0 の場合でも storage 行は意味がある (例: e2e fixture)。
+        cs = conduit_storage_usage()
+        return (
+            "No minds spawned.\n"
+            f"\n"
+            f"=== Resource Usage ===\n"
+            f"  conduit-storage  files={cs.file_count}  "
+            f"bytes={cs.byte_count}  size={_human_bytes(cs.byte_count)}"
+        )
+
+    status_counts = {"active": 0, "waiting": 0, "idle": 0}
+    category_counts = {
+        "attention": 0,
+        "running": 0,
+        "unread": 0,
+        "stale": 0,
+        "read": 0,
+    }
+    for _, status, category in observations:
+        status_counts[status] += 1
+        category_counts[category] += 1
+
+    lines: list[str] = []
+    lines.append("=== Realm Observatory (with resource usage) ===")
+    lines.append(f"  total: {len(observations)}")
+    lines.append(
+        "  status:   "
+        f"active={status_counts['active']}  "
+        f"waiting={status_counts['waiting']}  "
+        f"idle={status_counts['idle']}"
+    )
+    lines.append(
+        "  category: "
+        f"attention={category_counts['attention']}  "
+        f"running={category_counts['running']}  "
+        f"unread={category_counts['unread']}  "
+        f"stale={category_counts['stale']}  "
+        f"read={category_counts['read']}"
+    )
+    lines.append("")
+    lines.append(
+        f"{'NAME':<20} {'KIND':<10} {'PERSONA':<14} {'STATUS':<8} "
+        f"{'CATEGORY':<10} {'INBOX/ARCHIVE':<14} {'FILES':<6} {'BYTES':<10} SIZE"
+    )
+    total_bytes = 0
+    total_files = 0
+    for observation, status, category in observations:
+        ia = f"{observation.unread_inbox_count}/{observation.archive_count}"
+        # Mindspace dir 名 = Mind 名。`resource_usage._scan_dir_size` は
+        # symlink を辿らないので、信頼できるサイズが取れる。
+        mind_dir = _minds_dir() / observation.mind_name
+        files, byte_count = _scan_dir_size(mind_dir)
+        total_files += files
+        total_bytes += byte_count
+        lines.append(
+            f"{observation.mind_name:<20} {observation.kind:<10} "
+            f"{observation.persona:<14} {status:<8} {category:<10} "
+            f"{ia:<14} {files:<6} {byte_count:<10} {_human_bytes(byte_count)}"
+        )
+    lines.append("")
+    lines.append("=== Resource Usage ===")
+    lines.append(
+        f"  mindspace total  files={total_files}  bytes={total_bytes}  "
+        f"size={_human_bytes(total_bytes)}"
+    )
+    cs = conduit_storage_usage()
+    lines.append(
+        f"  conduit-storage  files={cs.file_count}  bytes={cs.byte_count}  "
+        f"size={_human_bytes(cs.byte_count)}"
+    )
     return "\n".join(lines)
 
 
@@ -395,8 +490,29 @@ def main(argv: list[str] | None = None) -> int:
     as_snapshot = "--snapshot" in argv
     as_prune = "--prune" in argv
     as_realm = "--realm" in argv
+    as_flow = "--flow" in argv
+    as_resource = "--resource" in argv
 
     now_epoch = time.time()
+
+    # Phase 5d-1 (#66): dispatch フロー / リソース使用量。各々独立して
+    # 動作する小さなビューなので、--realm より前に分岐する。
+    # --flow は他フラグ無視で flow ビューのみ。--json と組み合わせ可。
+    if as_flow:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from dispatch_flow import (  # noqa: PLC0415
+            aggregate_flow,
+            flow_to_json,
+            format_flow_table,
+        )
+
+        edges = aggregate_flow()
+        if as_json:
+            print(json.dumps(flow_to_json(edges), ensure_ascii=False, indent=2))
+        else:
+            print("=== Dispatch Flow ===")
+            print(format_flow_table(edges))
+        return 0
 
     if as_prune:
         # v0.1: TTL prune は --snapshot とは独立なサブコマンド扱い。
@@ -428,6 +544,24 @@ def main(argv: list[str] | None = None) -> int:
     if as_realm:
         # Phase 5b-1 統合ビュー: snapshot + Inbox + Conductor cycle status を 1 画面に
         print(_format_realm_view(observations))
+    elif as_resource:
+        # Phase 5d-1 (#66): 既存 mind table を拡張し、BYTES / FILES 列 + 末尾に
+        # Conduit storage バケットを併記。--json と組み合わせた場合は
+        # resource_usage の JSON 形式を採用 (Mind table の JSON 化は別途)。
+        if as_json:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from resource_usage import (  # noqa: PLC0415
+                all_usage,
+                usage_to_json,
+            )
+
+            print(
+                json.dumps(
+                    usage_to_json(all_usage()), ensure_ascii=False, indent=2
+                )
+            )
+        else:
+            print(_format_table_with_resource(observations))
     elif as_json:
         print(_format_json(observations))
     else:
