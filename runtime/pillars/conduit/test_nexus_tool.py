@@ -419,6 +419,50 @@ class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
         self.assertFalse(out.get("ok"), out)
         self.assertIn("new_mind_name", out.get("error", ""))
 
+    def test_spawn_subprocess_uses_utf8_encoding(self) -> None:
+        """Dogfooding bug 2026-05-26: Windows JP locale (cp932) で
+        subprocess output に日本語が混じると UnicodeDecodeError で reader
+        thread が死亡し、proc.stdout が None → `[-500:]` で TypeError、
+        実 spawn が成功しても MCP は ok=false を返す不整合があった。
+
+        修正: subprocess.run に encoding="utf-8" / errors="replace" を渡す。
+        本テストは subprocess.run の呼び出し引数を mock で intercept して
+        encoding が明示されていることを直接検証する (= 回帰防止)。
+        """
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        # subprocess.run を mock 化、引数を捕捉、proc.returncode=0 を返す
+        from unittest import mock  # noqa: PLC0415
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            # 成功を装う最小限の proc-like オブジェクト
+            class _Proc:
+                returncode = 0
+                stdout = "ok\n"
+                stderr = ""
+            return _Proc()
+
+        # subprocess.run 自体は nexus module 内で import されるので
+        # 'nexus.subprocess' を patch する (関数内 import 経由)。
+        import subprocess as _sp  # noqa: PLC0415
+
+        with mock.patch.object(_sp, "run", side_effect=fake_run):
+            out = self._call(
+                "spawn_mind",
+                {
+                    "mind_name": "gm", "new_mind_name": "newbie",
+                    "kind": "generic", "persona": "designer",
+                },
+            )
+        # 呼び出しが行われたこと
+        self.assertIn("kwargs", captured, out)
+        self.assertEqual(captured["kwargs"].get("encoding"), "utf-8")
+        self.assertEqual(captured["kwargs"].get("errors"), "replace")
+        # 成功扱いになっていること (= 回帰時はここで {ok: false, error: TypeError} になる)
+        self.assertTrue(out.get("ok"), out)
+
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
 class TestKillMindGuildmasterAxiom(unittest.TestCase):
@@ -549,6 +593,37 @@ class TestKillMindGuildmasterAxiom(unittest.TestCase):
         self.assertEqual(out.get("code"), "forbidden")
         self.assertIsNone(out.get("target_guild"))
         self.assertIn("registry", out.get("error", "").lower())
+
+    def test_kill_subprocess_uses_utf8_encoding(self) -> None:
+        """spawn_mind と対称の予防的回帰テスト。kill-mind.sh が将来日本語
+        メッセージを返したときに Windows JP locale (cp932) で死なないよう、
+        subprocess.run に encoding="utf-8" / errors="replace" が渡されている
+        ことを検証する (2026-05-26 dogfooding bug の予防)。
+        """
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        _write_mind_meta(self.home, "victim", guild="default", persona="implementer")
+        from unittest import mock  # noqa: PLC0415
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            class _Proc:
+                returncode = 0
+                stdout = "killed\n"
+                stderr = ""
+            return _Proc()
+
+        import subprocess as _sp  # noqa: PLC0415
+
+        with mock.patch.object(_sp, "run", side_effect=fake_run):
+            out = self._call(
+                "kill_mind",
+                {"mind_name": "gm", "target_mind": "victim"},
+            )
+        self.assertIn("kwargs", captured, out)
+        self.assertEqual(captured["kwargs"].get("encoding"), "utf-8")
+        self.assertEqual(captured["kwargs"].get("errors"), "replace")
+        self.assertTrue(out.get("ok"), out)
 
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
