@@ -188,11 +188,30 @@ def _parse_yaml_list(value: str) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
+def _strip_yaml_quotes(value: str) -> str:
+    """YAML scalar の外側の `"..."` / `'...'` を 1 段剥がす。
+
+    Phase 5d-4 (#102 CI failure): ADR / template の YAML 例は引用符付き
+    scalar を使うことが多い (schema_version: "0.1" 等)。workspace.py が
+    PR #99 Codex P2 で導入した処理を guild.py にも同期する。
+    listy な値 (kinds / personas) は `_parse_yaml_list` 側で `[a, b]`
+    を分解するので、本関数は scalar (non-list) 文字列に対してのみ意味を持つ。
+    """
+    s = value.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
 def _parse_manifest_frontmatter(text: str) -> dict[str, str] | None:
     """`---` で囲まれた frontmatter を `{key: value}` dict に。
 
     inbox.py の `_parse_issue_file` と同じ流儀。listy な値は raw string のまま
     返し、呼び出し側で `_parse_yaml_list` する。
+
+    値は `_strip_yaml_quotes` で外側の引用符 (`"..."` / `'...'`) を 1 段
+    剥がす。YAML の標準的な scalar 表記を受理する (#102 CI failure 修正、
+    workspace.py の PR #99 Codex P2 fix と同期)。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -212,7 +231,7 @@ def _parse_manifest_frontmatter(text: str) -> dict[str, str] | None:
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
-        meta[key.strip()] = value.strip()
+        meta[key.strip()] = _strip_yaml_quotes(value)
     return meta
 
 

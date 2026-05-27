@@ -175,6 +175,29 @@ class TestLoadManifest(unittest.TestCase):
             m = load_manifest("g1", guilds_dir=base)
             self.assertEqual(m.workspace, "developer-default")
 
+    def test_quoted_schema_version_accepted(self) -> None:
+        """Phase 5d-4 / #102 CI fix: ADR / template が `schema_version: "0.1"`
+        と引用符付きで書く形式も受理する (workspace.py の PR #99 fix と同期)。
+        旧 parser は '"0.1"' (引用符込み) と '0.1' を別物として扱い、
+        正規 YAML 形式の manifest を schema_version mismatch で reject していた。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _write_manifest(base, "g1", schema_version='"0.1"')
+            m = load_manifest("g1", guilds_dir=base)
+            self.assertEqual(m.schema_version, "0.1")
+
+    def test_single_quoted_scalar_accepted(self) -> None:
+        """単一引用符付き scalar も受理する (`workspace: 'dev'` 形式)。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _write_manifest(
+                base, "g1",
+                extra_fields={"workspace": "'developer-default'"},
+            )
+            m = load_manifest("g1", guilds_dir=base)
+            self.assertEqual(m.workspace, "developer-default")
+
     def test_missing_manifest_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
