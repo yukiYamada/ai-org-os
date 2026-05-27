@@ -61,7 +61,7 @@ workspace: <name>            # = ファイル名と一致
 schema_version: "0.1"
 purpose: <organizational rationale>
 vcs: git | none              # VCS の種別。none なら git 操作なし
-repo: <path or env var>      # 対象 repo の path (vcs=git 時のみ必須)
+repo: <path or env var>      # 対象 repo の path (vcs=git 時のみ必須、env var $VAR / ${VAR} / ~ を workspace.py 側で展開)
 mode: worktree | shared      # Mindspace 内に worktree を作る / 親 repo を share する
 branch_prefix: <prefix>      # spawn 時の自動 branch 命名 (例: mind/<name>)
 allowed_cli: [git, gh, ...]  # Mind が利用可能と想定する CLI 一覧 (ヒント、機械強制ではない)
