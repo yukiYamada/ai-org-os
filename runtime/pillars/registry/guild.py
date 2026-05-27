@@ -86,6 +86,9 @@ class GuildManifest:
     purpose: str
     kinds: tuple[str, ...]
     personas: tuple[str, ...]
+    # Phase 5d-4 (ADR-0022): Guild が組織既定の workspace を持てる。optional。
+    # 未指定なら spawn-mind の解決順で "default" に fallback (ADR-0022 §4)。
+    workspace: str
     path: Path
     raw_frontmatter: dict[str, str] = field(default_factory=dict)
 
@@ -269,6 +272,9 @@ def load_manifest(
         purpose=fm.get("purpose", ""),
         kinds=_parse_yaml_list(fm["kinds"]),
         personas=_parse_yaml_list(fm["personas"]),
+        # Phase 5d-4 (ADR-0022): workspace は optional。未指定は空文字 → spawn-mind の
+        # 解決順 (引数 > Guild > default) で fallback される。
+        workspace=fm.get("workspace", ""),
         path=manifest_path,
         raw_frontmatter=fm,
     )
@@ -564,6 +570,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"purpose:        {m.purpose}")
     print(f"kinds:          {list(m.kinds)}")
     print(f"personas:       {list(m.personas)}")
+    print(f"workspace:      {m.workspace or '(none, falls back to default)'}")
     print(f"manifest:       {m.path}")
     return 0
 
@@ -572,6 +579,25 @@ def _cmd_members(args: argparse.Namespace) -> int:
     members = enumerate_members(args.guild)
     for name in members:
         print(name)
+    return 0
+
+
+def _cmd_get_workspace(args: argparse.Namespace) -> int:
+    """Guild manifest の `workspace:` フィールドだけを emit する (spawn-mind 用)。
+
+    Phase 5d-4 (ADR-0022): spawn-mind の解決順 (引数 > Guild > default) の
+    middle layer を実現する thin helper。未設定なら空行を emit して exit 0。
+    Guild 自体が存在しない / malformed のときは stderr に ERROR + exit 3/4。
+    """
+    try:
+        m = load_manifest(args.guild)
+    except GuildNotFoundError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 3
+    except GuildValidationError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 4
+    print(m.workspace)
     return 0
 
 
@@ -604,6 +630,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     p_members.add_argument("guild")
     p_members.set_defaults(func=_cmd_members)
+
+    p_get_ws = sub.add_parser(
+        "get-workspace",
+        help="Guild の workspace フィールドだけを emit (spawn-mind 用)",
+    )
+    p_get_ws.add_argument("guild")
+    p_get_ws.set_defaults(func=_cmd_get_workspace)
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
     return ns.func(ns)

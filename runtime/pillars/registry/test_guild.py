@@ -155,6 +155,26 @@ class TestLoadManifest(unittest.TestCase):
             m = load_manifest("g1", guilds_dir=base)
             self.assertEqual(m.purpose, "")
 
+    def test_workspace_field_optional_default_empty(self) -> None:
+        """Phase 5d-4 (ADR-0022): workspace は optional フィールド、未指定なら
+        空文字。spawn-mind 側の解決順で `default` テンプレに fallback する。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _write_manifest(base, "g1")
+            m = load_manifest("g1", guilds_dir=base)
+            self.assertEqual(m.workspace, "")
+
+    def test_workspace_field_loaded_when_present(self) -> None:
+        """workspace が manifest にあれば GuildManifest.workspace に反映される。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _write_manifest(
+                base, "g1",
+                extra_fields={"workspace": "developer-default"},
+            )
+            m = load_manifest("g1", guilds_dir=base)
+            self.assertEqual(m.workspace, "developer-default")
+
     def test_missing_manifest_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

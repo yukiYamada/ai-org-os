@@ -511,6 +511,92 @@ fi
 # fixture cleanup
 rm -rf "${AI_ORG_OS_HOME}/workspaces" "${TEST_REPO_DIR}"
 
+echo "[case] 21. Guild manifest の workspace フィールドが --workspace 省略時に使われる (Phase 5d-4 / ADR-0022)"
+# 自前 Guild manifest を overlay で書き、その workspace フィールドを参照させる
+mkdir -p "${AI_ORG_OS_HOME}/guilds/dev-team"
+mkdir -p "${AI_ORG_OS_HOME}/workspaces"
+cat > "${AI_ORG_OS_HOME}/guilds/dev-team/manifest.md" <<EOF
+---
+guild: dev-team
+schema_version: "0.1"
+purpose: test guild with workspace default
+kinds: [generic]
+personas: [designer, implementer, reviewer]
+workspace: team-default
+---
+EOF
+cat > "${AI_ORG_OS_HOME}/workspaces/team-default.md" <<EOF
+---
+workspace: team-default
+schema_version: "0.1"
+vcs: none
+purpose: test workspace bound to dev-team guild
+---
+EOF
+mind_gws="${TEST_ID}-gws-resolved"
+set +e
+"${SPAWN}" --guild dev-team generic designer "${mind_gws}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "guild workspace fallback" 0 "${code}"
+assert_file_contains "meta records guild workspace: team-default" \
+  "${AI_ORG_OS_HOME}/minds/${mind_gws}/.mind-meta.md" "workspace: team-default"
+
+echo "[case] 22. --workspace 明示が Guild manifest workspace より優先される"
+# 別 workspace を用意して --workspace で override する
+cat > "${AI_ORG_OS_HOME}/workspaces/explicit-override.md" <<EOF
+---
+workspace: explicit-override
+schema_version: "0.1"
+vcs: none
+purpose: explicit workspace beats guild default
+---
+EOF
+mind_explicit="${TEST_ID}-explicit-over-guild"
+set +e
+"${SPAWN}" --guild dev-team --workspace explicit-override generic designer \
+  "${mind_explicit}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "explicit beats guild" 0 "${code}"
+assert_file_contains "meta records explicit workspace: explicit-override" \
+  "${AI_ORG_OS_HOME}/minds/${mind_explicit}/.mind-meta.md" "workspace: explicit-override"
+
+echo "[case] 23. Guild manifest に workspace 無しなら default が使われる"
+# まず default workspace template があることを確認 (case 15 で消されている可能性)
+mkdir -p "${AI_ORG_OS_HOME}/workspaces"
+cat > "${AI_ORG_OS_HOME}/workspaces/default.md" <<EOF
+---
+workspace: default
+schema_version: "0.1"
+vcs: none
+purpose: test default fallback
+---
+EOF
+# workspace 無しの Guild を作る
+mkdir -p "${AI_ORG_OS_HOME}/guilds/no-ws"
+cat > "${AI_ORG_OS_HOME}/guilds/no-ws/manifest.md" <<EOF
+---
+guild: no-ws
+schema_version: "0.1"
+purpose: guild without workspace field
+kinds: [generic]
+personas: [designer, implementer, reviewer]
+---
+EOF
+mind_no_ws="${TEST_ID}-no-ws-fallback"
+set +e
+"${SPAWN}" --guild no-ws generic designer "${mind_no_ws}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "no-ws fallback to default" 0 "${code}"
+assert_file_contains "meta records default workspace" \
+  "${AI_ORG_OS_HOME}/minds/${mind_no_ws}/.mind-meta.md" "workspace: default"
+
+# fixture cleanup (Phase 5d-4 ケース)
+rm -rf "${AI_ORG_OS_HOME}/guilds/dev-team" "${AI_ORG_OS_HOME}/guilds/no-ws"
+rm -rf "${AI_ORG_OS_HOME}/workspaces"
+
 echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
 # --start-loop は spawn 時点で claude バイナリを事前検証する。
 # claude を definitely-not-a-real-binary に差し替え、--start-loop で exit 8 が返ることを検証。

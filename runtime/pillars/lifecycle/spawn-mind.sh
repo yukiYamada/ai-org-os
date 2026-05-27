@@ -24,6 +24,9 @@ set -euo pipefail
 START_LOOP=0
 GUILD="default"
 WORKSPACE="default"
+# Phase 5d-4 (ADR-0022): --workspace が明示されたかを覚えておく。
+# 解決順 (引数 > Guild manifest > default) の middle layer 判定に使う。
+WORKSPACE_FROM_ARG=0
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -49,10 +52,12 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       WORKSPACE="$2"
+      WORKSPACE_FROM_ARG=1
       shift 2
       ;;
     --workspace=*)
       WORKSPACE="${1#--workspace=}"
+      WORKSPACE_FROM_ARG=1
       shift
       ;;
     -h|--help)
@@ -65,7 +70,8 @@ Options:
                         Manifest is looked up at \$AI_ORG_OS_HOME/guilds/<name>/manifest.md
                         first (overlay), then templates/guilds/<name>/manifest.md
                         (ADR-0020). The manifest must list this kind/persona.
-  --workspace <name>    Workspace template for this Mind (default: "default", ADR-0022).
+  --workspace <name>    Workspace template for this Mind (ADR-0022).
+                        Resolution order: --workspace arg > Guild manifest workspace field > "default".
                         Looked up at \$AI_ORG_OS_HOME/workspaces/<name>.md (overlay)
                         then templates/workspaces/<name>.md. With vcs=git/mode=worktree,
                         the Mindspace gets a git worktree at <Mindspace>/work/.
@@ -264,6 +270,29 @@ if ! "${HOST_PYTHON_BIN}" "${GUILD_PY}" validate \
   exit 11
 fi
 
+# Phase 5d-4 (ADR-0022): Workspace の解決順 (= 引数 > Guild manifest > default)。
+# --workspace 引数が明示されていればそれを使い、無ければ Guild manifest の
+# workspace フィールドを問い合わせ、それも空なら "default" にフォールバック。
+if [ "${WORKSPACE_FROM_ARG}" = "1" ]; then
+  echo "[spawn-mind] Workspace resolved from --workspace: '${WORKSPACE}'"
+else
+  # guild.py get-workspace は workspace フィールドだけを emit (空 or 値)。
+  # Guild が存在しない/malformed のときは stderr に ERROR + exit 3/4 だが、
+  # 直前の guild.py validate で正常確認済なのでここでは success path のみ想定。
+  GUILD_WS_RAW="$("${HOST_PYTHON_BIN}" "${GUILD_PY}" get-workspace "${GUILD}" 2>/dev/null || true)"
+  # CR / LF / 前後空白を除く (Windows + bash で改行が混入することの予防)
+  GUILD_WS="$(echo "${GUILD_WS_RAW}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [ -n "${GUILD_WS}" ]; then
+    WORKSPACE="${GUILD_WS}"
+    # guild.py が返した値も format 検証 (= manifest の typo / 攻撃的注入の防御)
+    validate_arg "workspace (from Guild ${GUILD})" "${WORKSPACE}"
+    echo "[spawn-mind] Workspace resolved from Guild '${GUILD}' manifest: '${WORKSPACE}'"
+  else
+    # WORKSPACE は初期値 "default" のまま
+    echo "[spawn-mind] Workspace resolved: 'default' (no --workspace, no Guild default)"
+  fi
+fi
+
 # Phase 5d-2 (ADR-0022): Workspace template の解決と検証。
 # vcs=git/mode=worktree なら git worktree を作るための事前確認も行う。
 WORKSPACE_PY="${RUNTIME_DIR}/pillars/registry/workspace.py"
@@ -272,7 +301,7 @@ if [ ! -f "${WORKSPACE_PY}" ]; then
   echo "[HINT] Phase 5d-1 implementation may be incomplete; please reinstall ai-org-os." >&2
   exit 10
 fi
-echo "[spawn-mind] Resolving workspace: '${WORKSPACE}'"
+echo "[spawn-mind] Loading workspace template: '${WORKSPACE}'"
 WORKSPACE_JSON="$("${HOST_PYTHON_BIN}" "${WORKSPACE_PY}" show "${WORKSPACE}" --json 2>&1)" || {
   echo "[ERROR] Workspace '${WORKSPACE}' is not registered (or malformed)." >&2
   echo "${WORKSPACE_JSON}" >&2
