@@ -357,6 +357,160 @@ fi
 rm -f "${AI_ORG_OS_HOME}/kinds/generic.md"
 rmdir "${AI_ORG_OS_HOME}/kinds" 2>/dev/null || true
 
+echo "[case] 15. --workspace 省略時は default workspace が使われる (Phase 5d-2 / ADR-0022)"
+# default workspace template を home overlay に置く (vcs=none = no worktree)
+mkdir -p "${AI_ORG_OS_HOME}/workspaces"
+cat > "${AI_ORG_OS_HOME}/workspaces/default.md" <<EOF
+---
+workspace: default
+schema_version: "0.1"
+vcs: none
+purpose: test default (no git)
+---
+
+# Workspace: default (no-op for tests)
+EOF
+mind_wsd="${TEST_ID}-ws-default"
+set +e
+"${SPAWN}" generic designer "${mind_wsd}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "default workspace (omitted)" 0 "${code}"
+assert_file_contains "meta records workspace: default" \
+  "${AI_ORG_OS_HOME}/minds/${mind_wsd}/.mind-meta.md" "workspace: default"
+# work/ subdir は vcs=none では作られない
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_wsd}/work" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("default workspace should not create work/ subdir")
+  echo "  [NG]   default workspace: work/ subdir leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   default workspace: no work/ subdir (vcs=none)"
+fi
+
+echo "[case] 16. --workspace=<unknown> は exit 12"
+mind_wsu="${TEST_ID}-ws-unknown"
+set +e
+"${SPAWN}" --workspace "no-such-ws-${TEST_ID}" generic designer "${mind_wsu}" \
+  >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "unknown workspace" 12 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_wsu}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("unknown workspace: Mindspace should not leak")
+  echo "  [NG]   unknown workspace: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   unknown workspace: no Mindspace leaked"
+fi
+
+echo "[case] 17. --workspace が形式違反は exit 6"
+mind_wsbad="${TEST_ID}-ws-bad"
+set +e
+"${SPAWN}" --workspace '../escape' generic designer "${mind_wsbad}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "workspace path traversal" 6 "${code}"
+
+echo "[case] 18. vcs=git/mode=worktree で実 worktree が作られる (Phase 5d-2)"
+# テスト用 fixture: 一時 git repo を作って workspace で指定
+TEST_REPO_DIR="${AI_ORG_OS_HOME}/test-repo-${TEST_ID}"
+mkdir -p "${TEST_REPO_DIR}"
+git -C "${TEST_REPO_DIR}" init -q -b main
+git -C "${TEST_REPO_DIR}" -c user.email=t@e -c user.name=t commit \
+  --allow-empty -q -m "initial"
+cat > "${AI_ORG_OS_HOME}/workspaces/dev-test.md" <<EOF
+---
+workspace: dev-test
+schema_version: "0.1"
+vcs: git
+repo: ${TEST_REPO_DIR}
+mode: worktree
+branch_prefix: mind
+---
+
+# Workspace: dev-test (git worktree for integration test)
+EOF
+mind_ws_wt="${TEST_ID}-ws-wt"
+set +e
+"${SPAWN}" --workspace dev-test generic designer "${mind_ws_wt}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "worktree workspace spawn" 0 "${code}"
+# work/ subdir が git worktree として存在し、branch が mind/<mind_name>
+if [ ! -d "${AI_ORG_OS_HOME}/minds/${mind_ws_wt}/work/.git" ] && \
+   [ ! -f "${AI_ORG_OS_HOME}/minds/${mind_ws_wt}/work/.git" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("worktree: work/.git not present")
+  echo "  [NG]   worktree: work/.git missing"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   worktree: work/.git present (worktree)"
+fi
+expected_branch="mind/${mind_ws_wt}"
+actual_branch="$(git -C "${AI_ORG_OS_HOME}/minds/${mind_ws_wt}/work" rev-parse --abbrev-ref HEAD)"
+if [ "${actual_branch}" = "${expected_branch}" ]; then
+  PASS=$((PASS + 1))
+  echo "  [ok]   worktree: on branch ${actual_branch}"
+else
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("worktree branch mismatch: expected=${expected_branch} actual=${actual_branch}")
+  echo "  [NG]   worktree: branch=${actual_branch}, want ${expected_branch}"
+fi
+# Mindspace 直下の Mind メタは従来通り
+assert_file_exists "mindspace root CLAUDE.md (Persona)" \
+  "${AI_ORG_OS_HOME}/minds/${mind_ws_wt}/CLAUDE.md"
+assert_file_contains "meta records workspace: dev-test" \
+  "${AI_ORG_OS_HOME}/minds/${mind_ws_wt}/.mind-meta.md" "workspace: dev-test"
+
+echo "[case] 19. 存在しない repo の workspace は exit 13"
+cat > "${AI_ORG_OS_HOME}/workspaces/ghost-repo.md" <<EOF
+---
+workspace: ghost-repo
+schema_version: "0.1"
+vcs: git
+repo: /no/such/repo/${TEST_ID}
+mode: worktree
+---
+
+# Workspace: ghost-repo (repo does not exist)
+EOF
+mind_gr="${TEST_ID}-ghost-repo"
+set +e
+"${SPAWN}" --workspace ghost-repo generic designer "${mind_gr}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "ghost repo workspace" 13 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_gr}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("ghost repo: Mindspace should not leak")
+  echo "  [NG]   ghost repo: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   ghost repo: no Mindspace leaked"
+fi
+
+echo "[case] 20. branch 衝突は exit 13 (worktree add 前にチェック)"
+# 既に branch を作っておく
+git -C "${TEST_REPO_DIR}" branch "mind/${TEST_ID}-conflict-existing" 2>/dev/null || true
+mind_conflict="${TEST_ID}-conflict-existing"
+set +e
+"${SPAWN}" --workspace dev-test generic designer "${mind_conflict}" >/dev/null 2>&1
+code=$?
+set -e
+assert_exit_code "branch conflict" 13 "${code}"
+if [ -d "${AI_ORG_OS_HOME}/minds/${mind_conflict}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("branch conflict: Mindspace should not leak")
+  echo "  [NG]   branch conflict: Mindspace leaked"
+else
+  PASS=$((PASS + 1))
+  echo "  [ok]   branch conflict: no Mindspace leaked"
+fi
+# fixture cleanup
+rm -rf "${AI_ORG_OS_HOME}/workspaces" "${TEST_REPO_DIR}"
+
 echo "[case] 8. --start-loop で claude が無いと exit 8（PR #61 self-review fix）"
 # --start-loop は spawn 時点で claude バイナリを事前検証する。
 # claude を definitely-not-a-real-binary に差し替え、--start-loop で exit 8 が返ることを検証。
