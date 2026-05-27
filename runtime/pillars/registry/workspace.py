@@ -167,11 +167,30 @@ def _parse_yaml_list(value: str) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
+def _strip_yaml_quotes(value: str) -> str:
+    """YAML scalar の外側の `"..."` / `'...'` を 1 段剥がす。
+
+    Codex P2 (#99): ADR-0022 のテンプレ例は `schema_version: "0.1"` のように
+    引用符付きで書かれている。本モジュールの最小 parser は値文字列を
+    そのまま比較してしまうので `'"0.1"'` (引用符込み 5 文字) と `"0.1"`
+    (3 文字) が食い違う → 公式例が即 reject される穴があった。
+    本関数で外側の引用符を 1 段剥がすことで「ADR が示す形式 = 受理される」
+    の整合性を保つ。
+    """
+    s = value.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
 def _parse_frontmatter(text: str) -> dict[str, str] | None:
     """`---` で囲まれた frontmatter を {key: value} dict に。
 
     guild._parse_manifest_frontmatter と同じ流儀。本文には立ち入らない
     (2 個目の `---` で終了)。listy な値は呼び出し側で `_parse_yaml_list`。
+
+    値は `_strip_yaml_quotes` で外側の引用符 (`"..."` / `'...'`) を 1 段
+    剥がす。YAML の標準的な scalar 表記を受理する (#99 Codex P2)。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -191,7 +210,7 @@ def _parse_frontmatter(text: str) -> dict[str, str] | None:
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
-        meta[key.strip()] = value.strip()
+        meta[key.strip()] = _strip_yaml_quotes(value)
     return meta
 
 

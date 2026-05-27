@@ -414,6 +414,66 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 4)
 
 
+class TestQuotedScalarSupport(unittest.TestCase):
+    """Codex P2 (#99): ADR-0022 例のように引用符付き scalar (\"0.1\") も受理する。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_double_quoted_schema_version(self) -> None:
+        path = self.dir / "default.md"
+        path.write_text(
+            '---\n'
+            'workspace: default\n'
+            'schema_version: "0.1"\n'
+            'vcs: none\n'
+            '---\n',
+            encoding="utf-8",
+        )
+        w = load_workspace("default", workspaces_dir=self.dir)
+        self.assertEqual(w.schema_version, "0.1")
+        self.assertEqual(w.vcs, "none")
+
+    def test_single_quoted_scalar(self) -> None:
+        path = self.dir / "dev.md"
+        path.write_text(
+            "---\n"
+            "workspace: dev\n"
+            "schema_version: '0.1'\n"
+            "vcs: 'git'\n"
+            "repo: '/home/me/proj'\n"
+            "mode: 'worktree'\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        self.assertEqual(w.schema_version, "0.1")
+        self.assertEqual(w.vcs, "git")
+        self.assertEqual(w.repo, "/home/me/proj")
+        self.assertEqual(w.mode, "worktree")
+
+    def test_unquoted_still_works(self) -> None:
+        """既存の unquoted 形式も維持されること (regression 防止)。"""
+        path = self.dir / "mixed.md"
+        path.write_text(
+            "---\n"
+            "workspace: mixed\n"
+            "schema_version: 0.1\n"
+            "vcs: git\n"
+            'repo: "/home/me/q"\n'  # quoted の混在ケース
+            "mode: worktree\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        w = load_workspace("mixed", workspaces_dir=self.dir)
+        self.assertEqual(w.schema_version, "0.1")
+        self.assertEqual(w.repo, "/home/me/q")
+
+
 class TestConstants(unittest.TestCase):
     """値域定数の verify (将来拡張時の sanity check)。"""
 
