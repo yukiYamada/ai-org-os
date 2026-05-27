@@ -98,22 +98,30 @@ spawn-mind が workspace 名を決める順:
 
 1. **`--workspace <name>` 引数** (最優先、明示的注入)
 2. **Guild manifest の `workspace: <name>` フィールド** (Guild の組織既定、未指定なら次へ)
-3. **`default`** (templates/workspaces/default.md にフォールバック)
+3. **`default` テンプレートにフォールバック** (`templates/workspaces/default.md`、§5 で詳述)
 
 これにより:
 - 個別 spawn で workspace を明示注入できる (柔軟性)
 - Guild ごとに「この組織はこれで開発する」を既定できる (組織パッケージ思想)
-- 何も指定しなければ ai-org-os 同梱の default が動く (out-of-the-box experience)
+- 何も指定しなければ ai-org-os 同梱の **後方互換 no-op テンプレ** (`default`、§5) が動く (現状の spawn-mind 挙動を保つ)
+- 組織既定を変えたい場合は overlay (`$AI_ORG_OS_HOME/workspaces/default.md`) で差し替える
 
 ### 5. ai-org-os が同梱するデフォルトテンプレート
 
 | name | vcs | mode | 目的 |
 |---|---|---|---|
-| `developer-default` | git | worktree | 一般的な開発組織 (GitHub + git/gh CLI + worktree per Mind) |
+| `default` | none | — | **§4 のフォールバック先**。`--workspace` 省略 + Guild manifest に `workspace:` 未指定の場合に解決される **後方互換用 no-op テンプレ**。worktree を作らず、現在の spawn-mind 挙動 (Mindspace のみ作成、git 連携無し) を再現する |
+| `developer-default` | git | worktree | **opt-in の主流ケース**。GitHub + git/gh CLI + worktree per Mind。利用者が明示的に `--workspace developer-default` を渡すか Guild manifest に書いたときだけ作動 |
 | `docs-only` | none | — | git なし、Mindspace 内で markdown 編集のみ (例: 文書チームのみの組織) |
 | `readonly-analysis` | git | shared (read-only suggested) | 既存 repo を読むだけの分析 Mind (commit/push しない想定、ヒント) |
 
-`developer-default` がほぼ全利用ケースをカバー。残る 2 つは「他にも世界がある」ことを示すための **見本** (Workspace = C 依存注入の証左)。
+**重要な後方互換ルール**: `default` は **vcs=none の no-op**。これにより:
+
+- 既存の `spawn-mind.sh` 呼び出し (= `--workspace` 引数なし) は引き続き worktree を作らない (現状動作を保つ)
+- 「git 連携が欲しい」利用者は `--workspace developer-default` を明示するか、Guild manifest に書く
+- 「全 Mind を worktree モードにしたい」組織は `$AI_ORG_OS_HOME/workspaces/default.md` を overlay で `developer-default` 相当に差し替える (= overlay で組織既定を変える正規ルート)
+
+`developer-default` / `docs-only` / `readonly-analysis` は **見本** として「Workspace は C 依存注入で自由に差し替えられる」ことを示す (Workspace カテゴリの実証)。実際の運用は組織が overlay で自身のテンプレを追加する想定。
 
 ### 6. Workspace は axiom ではない、機械強制しない
 
@@ -147,7 +155,7 @@ spawn-mind が workspace 名を決める順:
 2. **PR #2**: `spawn-mind.sh --workspace <name>` 引数 + Mindspace = worktree モデル実装 (vcs=git + mode=worktree)
 3. **PR #3**: `kill-mind.sh` で worktree remove も実行 + 失敗時の整合性 (= Mindspace は消えたが worktree 登録は残る、を避ける)
 4. **PR #4**: Guild manifest の optional `workspace:` フィールド + デフォルト解決順 (引数 > Guild > default)
-5. **PR #5**: `developer-default` / `docs-only` / `readonly-analysis` テンプレ整備
+5. **PR #5**: 同梱 4 テンプレ整備 (`default` 後方互換 no-op + `developer-default` / `docs-only` / `readonly-analysis` 見本)
 6. **PR #6**: dogfooding (Mind に実コードを書かせる E2E)
 
 各 PR は機械強制系の影響範囲が大きい (spawn / kill の物理動作変更) ので Codex review + self-review + 回帰テストを厳密に通す。
@@ -167,7 +175,7 @@ spawn-mind が workspace 名を決める順:
 1. **spawn-mind の責務が広がる**: Mindspace 作成 + .mcp.json 配置 + worktree 作成 まで担当する。エラーパスが複雑になる (worktree 作成失敗、branch 衝突、repo path 不在 等)。各失敗で Mindspace 残骸が出ないよう atomic な rollback が必要
 2. **kill-mind の責務も広がる**: Mindspace 削除前に worktree 登録解除、worktree 解除失敗時の対処、未 commit の変更の扱い (warn + force remove)。Codex P2 で過去に踏んだ「先消し後消しの順序」(#91) と同じ慎重さが必要
 3. **「Mindspace = worktree」の境界が増える物理状態**: Mindspace (カテゴリ A 内側) と repo (カテゴリ C 外部) が **同じファイルシステム位置で接続される**。新しい物理境界カテゴリ (E?) を ADR-0014 に追加するかどうかは別 ADR で判断 (本 ADR スコープ外、必要なら ADR-0014 update)
-4. **既存利用者の互換**: 現状 0 利用者だが、`--workspace` 引数省略時のデフォルトを `developer-default` にすると **既存の spawn-mind スクリプト呼び出しが変わる** (突然 git worktree を作ろうとする)。これを避けるために **過渡期は `vcs: none` の `default` テンプレを用意** し、明示的に `--workspace developer-default` を渡したときだけ worktree モードに入る。互換重視
+4. **既存利用者の互換**: 現状 0 利用者だが、`--workspace` 引数省略時のデフォルトを `developer-default` にすると **既存の spawn-mind スクリプト呼び出しが変わる** (突然 git worktree を作ろうとする)。これを避けるために §5 の **`default` テンプレを `vcs: none` の no-op として同梱** し、明示的に `--workspace developer-default` を渡した時または overlay で書き換えた時だけ worktree モードに入る。互換重視
 5. **Windows 環境での挙動差**: dogfooding 2026-05-26 で発覚した cp932 問題と同じく、Windows の git CLI 起動 + path 解決で踏む可能性。Phase 5d 各 PR で Windows + Linux 両環境で回帰テストする
 6. **Persona (B) との接続点**: Workspace template の末尾を Mind の CLAUDE.md に append する場合、Persona と Workspace の両方が「お前は何者で何をしろ」を語る → 矛盾が出ないように Persona は「役割」、Workspace は「作業環境」と責務分離を Persona ガイドで明示する
 
