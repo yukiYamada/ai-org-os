@@ -86,6 +86,9 @@ class GuildManifest:
     purpose: str
     kinds: tuple[str, ...]
     personas: tuple[str, ...]
+    # Phase 5d-4 (ADR-0022): Guild が組織既定の workspace を持てる。optional。
+    # 未指定なら spawn-mind の解決順で "default" に fallback (ADR-0022 §4)。
+    workspace: str
     path: Path
     raw_frontmatter: dict[str, str] = field(default_factory=dict)
 
@@ -185,11 +188,30 @@ def _parse_yaml_list(value: str) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
+def _strip_yaml_quotes(value: str) -> str:
+    """YAML scalar の外側の `"..."` / `'...'` を 1 段剥がす。
+
+    Phase 5d-4 (#102 CI failure): ADR / template の YAML 例は引用符付き
+    scalar を使うことが多い (schema_version: "0.1" 等)。workspace.py が
+    PR #99 Codex P2 で導入した処理を guild.py にも同期する。
+    listy な値 (kinds / personas) は `_parse_yaml_list` 側で `[a, b]`
+    を分解するので、本関数は scalar (non-list) 文字列に対してのみ意味を持つ。
+    """
+    s = value.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
 def _parse_manifest_frontmatter(text: str) -> dict[str, str] | None:
     """`---` で囲まれた frontmatter を `{key: value}` dict に。
 
     inbox.py の `_parse_issue_file` と同じ流儀。listy な値は raw string のまま
     返し、呼び出し側で `_parse_yaml_list` する。
+
+    値は `_strip_yaml_quotes` で外側の引用符 (`"..."` / `'...'`) を 1 段
+    剥がす。YAML の標準的な scalar 表記を受理する (#102 CI failure 修正、
+    workspace.py の PR #99 Codex P2 fix と同期)。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -209,7 +231,7 @@ def _parse_manifest_frontmatter(text: str) -> dict[str, str] | None:
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
-        meta[key.strip()] = value.strip()
+        meta[key.strip()] = _strip_yaml_quotes(value)
     return meta
 
 
@@ -269,6 +291,9 @@ def load_manifest(
         purpose=fm.get("purpose", ""),
         kinds=_parse_yaml_list(fm["kinds"]),
         personas=_parse_yaml_list(fm["personas"]),
+        # Phase 5d-4 (ADR-0022): workspace は optional。未指定は空文字 → spawn-mind の
+        # 解決順 (引数 > Guild > default) で fallback される。
+        workspace=fm.get("workspace", ""),
         path=manifest_path,
         raw_frontmatter=fm,
     )
@@ -564,6 +589,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"purpose:        {m.purpose}")
     print(f"kinds:          {list(m.kinds)}")
     print(f"personas:       {list(m.personas)}")
+    print(f"workspace:      {m.workspace or '(none, falls back to default)'}")
     print(f"manifest:       {m.path}")
     return 0
 
@@ -572,6 +598,25 @@ def _cmd_members(args: argparse.Namespace) -> int:
     members = enumerate_members(args.guild)
     for name in members:
         print(name)
+    return 0
+
+
+def _cmd_get_workspace(args: argparse.Namespace) -> int:
+    """Guild manifest の `workspace:` フィールドだけを emit する (spawn-mind 用)。
+
+    Phase 5d-4 (ADR-0022): spawn-mind の解決順 (引数 > Guild > default) の
+    middle layer を実現する thin helper。未設定なら空行を emit して exit 0。
+    Guild 自体が存在しない / malformed のときは stderr に ERROR + exit 3/4。
+    """
+    try:
+        m = load_manifest(args.guild)
+    except GuildNotFoundError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 3
+    except GuildValidationError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 4
+    print(m.workspace)
     return 0
 
 
@@ -604,6 +649,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     p_members.add_argument("guild")
     p_members.set_defaults(func=_cmd_members)
+
+    p_get_ws = sub.add_parser(
+        "get-workspace",
+        help="Guild の workspace フィールドだけを emit (spawn-mind 用)",
+    )
+    p_get_ws.add_argument("guild")
+    p_get_ws.set_defaults(func=_cmd_get_workspace)
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
     return ns.func(ns)
