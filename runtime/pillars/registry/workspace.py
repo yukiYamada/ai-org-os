@@ -292,7 +292,15 @@ def load_workspace(
     # vcs=git は repo 必須、mode は worktree か shared (空は許容しない)。
     # vcs=none は repo 空でよく、mode も任意 (空または "worktree"/"shared" 全て許容、
     # ただし実装側 PR #2 で no-op になる)。
-    repo = fm.get("repo", "")
+    # Codex P2 (#100): ADR-0022 §2 で repo は "<path or env var>" と documented。
+    # 利用者が repo: $TARGET_REPO や repo: ~/proj を書いた場合、これらは shell
+    # ではなく workspace.py 側で展開する (= 表記の単一の真実)。
+    # - expandvars: $VAR / ${VAR}
+    # - expanduser: ~ / ~user
+    # 未定義の env var は os.path.expandvars が literal を残すので、
+    # 後段の repo dir 存在 check (spawn-mind.sh) で exit 13 になる
+    # (= configuration error として顕在化)。
+    repo = os.path.expanduser(os.path.expandvars(fm.get("repo", "")))
     if vcs == "git":
         if not repo:
             raise WorkspaceValidationError(

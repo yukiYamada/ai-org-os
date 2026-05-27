@@ -474,6 +474,72 @@ class TestQuotedScalarSupport(unittest.TestCase):
         self.assertEqual(w.repo, "/home/me/q")
 
 
+class TestRepoEnvExpansion(unittest.TestCase):
+    """Codex P2 (#100): ADR-0022 §2 で documented な env var / ~ 形式の repo を
+    workspace.py 側で展開する。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        # 環境変数 fixture
+        self._old_target_repo = os.environ.get("AI_ORG_OS_TEST_TARGET_REPO")
+        os.environ["AI_ORG_OS_TEST_TARGET_REPO"] = "/home/test/myrepo"
+
+    def tearDown(self) -> None:
+        if self._old_target_repo is None:
+            os.environ.pop("AI_ORG_OS_TEST_TARGET_REPO", None)
+        else:
+            os.environ["AI_ORG_OS_TEST_TARGET_REPO"] = self._old_target_repo
+        self.tmp.cleanup()
+
+    def test_dollar_var_expansion(self) -> None:
+        _write_workspace(
+            self.dir, "dev", vcs="git",
+            repo="$AI_ORG_OS_TEST_TARGET_REPO", mode="worktree",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        self.assertEqual(w.repo, "/home/test/myrepo")
+
+    def test_braced_var_expansion(self) -> None:
+        _write_workspace(
+            self.dir, "dev", vcs="git",
+            repo="${AI_ORG_OS_TEST_TARGET_REPO}/sub", mode="worktree",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        self.assertEqual(w.repo, "/home/test/myrepo/sub")
+
+    def test_tilde_expansion(self) -> None:
+        _write_workspace(
+            self.dir, "dev", vcs="git",
+            repo="~/projects/foo", mode="worktree",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        self.assertNotIn("~", w.repo)
+        self.assertTrue(w.repo.endswith("projects/foo")
+                        or w.repo.endswith("projects\\foo"))
+
+    def test_undefined_var_left_literal(self) -> None:
+        """未定義 env var は literal を残す。spawn-mind 側の dir 存在 check で
+        configuration error として顕在化する (= 沈黙の失敗を作らない)。"""
+        _write_workspace(
+            self.dir, "dev", vcs="git",
+            repo="$AI_ORG_OS_TEST_UNDEFINED_VAR_XYZ/path", mode="worktree",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        # expandvars は未定義 var を literal で残す
+        self.assertIn("$AI_ORG_OS_TEST_UNDEFINED_VAR_XYZ", w.repo)
+
+    def test_no_expansion_for_plain_path(self) -> None:
+        """普通の絶対 path は変更されない。"""
+        _write_workspace(
+            self.dir, "dev", vcs="git",
+            repo="/absolute/path/no/vars", mode="worktree",
+        )
+        w = load_workspace("dev", workspaces_dir=self.dir)
+        self.assertEqual(w.repo, "/absolute/path/no/vars")
+
+
 class TestConstants(unittest.TestCase):
     """値域定数の verify (将来拡張時の sanity check)。"""
 

@@ -23,6 +23,7 @@ set -euo pipefail
 
 START_LOOP=0
 GUILD="default"
+WORKSPACE="default"
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -42,23 +43,40 @@ while [ "$#" -gt 0 ]; do
       GUILD="${1#--guild=}"
       shift
       ;;
+    --workspace)
+      if [ "$#" -lt 2 ]; then
+        echo "[ERROR] --workspace requires a value" >&2
+        exit 1
+      fi
+      WORKSPACE="$2"
+      shift 2
+      ;;
+    --workspace=*)
+      WORKSPACE="${1#--workspace=}"
+      shift
+      ;;
     -h|--help)
       cat <<HELP
-Usage: $0 [--start-loop] [--guild <name>] <kind> <persona> <mind-name>
+Usage: $0 [--start-loop] [--guild <name>] [--workspace <name>] <kind> <persona> <mind-name>
 
 Options:
-  --start-loop      Launch mind-loop.sh in the background after spawning (ADR-0010).
-  --guild <name>    Guild to which this Mind belongs (default: "default", ADR-0019).
-                    Manifest is looked up at \$AI_ORG_OS_HOME/guilds/<name>/manifest.md
-                    first (overlay), then templates/guilds/<name>/manifest.md
-                    (ADR-0020). The manifest must list this kind/persona.
+  --start-loop          Launch mind-loop.sh in the background after spawning (ADR-0010).
+  --guild <name>        Guild to which this Mind belongs (default: "default", ADR-0019).
+                        Manifest is looked up at \$AI_ORG_OS_HOME/guilds/<name>/manifest.md
+                        first (overlay), then templates/guilds/<name>/manifest.md
+                        (ADR-0020). The manifest must list this kind/persona.
+  --workspace <name>    Workspace template for this Mind (default: "default", ADR-0022).
+                        Looked up at \$AI_ORG_OS_HOME/workspaces/<name>.md (overlay)
+                        then templates/workspaces/<name>.md. With vcs=git/mode=worktree,
+                        the Mindspace gets a git worktree at <Mindspace>/work/.
 
 Kind / Persona lookup (Phase 5c-1 / ADR-0020):
   \$AI_ORG_OS_HOME/{kinds,personas}/<name>.md (overlay) → templates/{kinds,personas}/<name>.md
 
 Example:
-  $0 generic designer my-first-mind                          # default guild
+  $0 generic designer my-first-mind                          # default guild + default workspace (no git)
   $0 --guild backend generic designer my-backend-mind        # explicit guild
+  $0 --workspace developer-default generic designer my-dev   # enable git worktree mode
   $0 --start-loop generic designer my-first-mind             # spawn and start loop
 HELP
       exit 0
@@ -71,7 +89,7 @@ HELP
 done
 
 if [ "${#ARGS[@]}" -ne 3 ]; then
-  echo "Usage: $0 [--start-loop] [--guild <name>] <kind> <persona> <mind-name>" >&2
+  echo "Usage: $0 [--start-loop] [--guild <name>] [--workspace <name>] <kind> <persona> <mind-name>" >&2
   echo "Example: $0 generic designer my-first-mind" >&2
   exit 1
 fi
@@ -100,6 +118,7 @@ validate_arg "kind" "${KIND}"
 validate_arg "persona" "${PERSONA}"
 validate_arg "mind-name" "${MIND_NAME}"
 validate_arg "guild" "${GUILD}"
+validate_arg "workspace" "${WORKSPACE}"
 
 # Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。
 # Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/<name>/ で
@@ -245,8 +264,77 @@ if ! "${HOST_PYTHON_BIN}" "${GUILD_PY}" validate \
   exit 11
 fi
 
+# Phase 5d-2 (ADR-0022): Workspace template の解決と検証。
+# vcs=git/mode=worktree なら git worktree を作るための事前確認も行う。
+WORKSPACE_PY="${RUNTIME_DIR}/pillars/registry/workspace.py"
+if [ ! -f "${WORKSPACE_PY}" ]; then
+  echo "[ERROR] workspace.py not found at ${WORKSPACE_PY}" >&2
+  echo "[HINT] Phase 5d-1 implementation may be incomplete; please reinstall ai-org-os." >&2
+  exit 10
+fi
+echo "[spawn-mind] Resolving workspace: '${WORKSPACE}'"
+WORKSPACE_JSON="$("${HOST_PYTHON_BIN}" "${WORKSPACE_PY}" show "${WORKSPACE}" --json 2>&1)" || {
+  echo "[ERROR] Workspace '${WORKSPACE}' is not registered (or malformed)." >&2
+  echo "${WORKSPACE_JSON}" >&2
+  echo "[HINT] List available workspaces: ${HOST_PYTHON_BIN} ${WORKSPACE_PY} list" >&2
+  echo "[HINT] Inspect workspace:         ${HOST_PYTHON_BIN} ${WORKSPACE_PY} show ${WORKSPACE}" >&2
+  exit 12
+}
+# JSON から vcs / mode / repo / branch_prefix を抽出 (yaml parse は workspace.py が済ませた)
+WS_VCS="$("${HOST_PYTHON_BIN}" -c "import json,sys; print(json.loads(sys.argv[1]).get('vcs',''))" "${WORKSPACE_JSON}")"
+WS_MODE="$("${HOST_PYTHON_BIN}" -c "import json,sys; print(json.loads(sys.argv[1]).get('mode',''))" "${WORKSPACE_JSON}")"
+WS_REPO="$("${HOST_PYTHON_BIN}" -c "import json,sys; print(json.loads(sys.argv[1]).get('repo',''))" "${WORKSPACE_JSON}")"
+WS_BRANCH_PREFIX="$("${HOST_PYTHON_BIN}" -c "import json,sys; print(json.loads(sys.argv[1]).get('branch_prefix','mind'))" "${WORKSPACE_JSON}")"
+# branch_prefix が空なら "mind" を fallback (= worktree branch 名が空 prefix で衝突しないため)
+if [ -z "${WS_BRANCH_PREFIX}" ]; then
+  WS_BRANCH_PREFIX="mind"
+fi
+echo "[spawn-mind]   workspace: vcs=${WS_VCS} mode=${WS_MODE} repo=${WS_REPO:-(none)} branch_prefix=${WS_BRANCH_PREFIX}"
+
+# vcs=git/mode=worktree の事前確認: repo が git 管理下にあるか
+WS_WANT_WORKTREE=0
+if [ "${WS_VCS}" = "git" ] && [ "${WS_MODE}" = "worktree" ]; then
+  WS_WANT_WORKTREE=1
+  if [ -z "${WS_REPO}" ]; then
+    echo "[ERROR] Workspace '${WORKSPACE}' has vcs=git/mode=worktree but no repo path." >&2
+    echo "[HINT] Add 'repo: <path>' to the workspace template." >&2
+    exit 13
+  fi
+  if [ ! -d "${WS_REPO}" ]; then
+    echo "[ERROR] Workspace repo '${WS_REPO}' does not exist." >&2
+    exit 13
+  fi
+  if ! git -C "${WS_REPO}" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "[ERROR] Workspace repo '${WS_REPO}' is not a git repository." >&2
+    exit 13
+  fi
+  # branch 名衝突チェック (既存 branch があると worktree add が exit 128 する)
+  WS_BRANCH="${WS_BRANCH_PREFIX}/${MIND_NAME}"
+  if git -C "${WS_REPO}" rev-parse --verify --quiet "refs/heads/${WS_BRANCH}" >/dev/null 2>&1; then
+    echo "[ERROR] Branch '${WS_BRANCH}' already exists in repo '${WS_REPO}'." >&2
+    echo "[HINT] Either delete the branch first, or pick a different Mind name." >&2
+    exit 13
+  fi
+fi
+
 echo "[spawn-mind] Creating Mindspace: ${MIND_DIR}"
 mkdir -p "${MIND_DIR}"
+
+# Phase 5d-2 (ADR-0022): worktree モードなら Mindspace 直下に work/ subdir を作る。
+# Mindspace 直下は Mind メタ (CLAUDE.md / .mcp.json / .mind-meta.md) のまま、
+# work/ subdir のみが target repo の worktree。これにより target repo に
+# CLAUDE.md があっても衝突しない (ADR-0022 §3 確定版)。
+if [ "${WS_WANT_WORKTREE}" = "1" ]; then
+  WS_WORK_DIR="${MIND_DIR}/work"
+  WS_BRANCH="${WS_BRANCH_PREFIX}/${MIND_NAME}"
+  echo "[spawn-mind] Creating git worktree: ${WS_WORK_DIR} (branch ${WS_BRANCH})"
+  if ! git -C "${WS_REPO}" worktree add -b "${WS_BRANCH}" "${WS_WORK_DIR}" 2>&1; then
+    echo "[ERROR] git worktree add failed." >&2
+    echo "[HINT] Rolling back Mindspace ${MIND_DIR}" >&2
+    rm -rf "${MIND_DIR}"
+    exit 14
+  fi
+fi
 
 echo "[spawn-mind] Installing Persona '${PERSONA}' as CLAUDE.md"
 cp "${PERSONA_FILE}" "${MIND_DIR}/CLAUDE.md"
@@ -259,6 +347,7 @@ mind_name: ${MIND_NAME}
 kind: ${KIND}
 persona: ${PERSONA}
 guild: ${GUILD}
+workspace: ${WORKSPACE}
 spawned_at: ${SPAWNED_AT}
 phase: 1+3
 ---
@@ -272,6 +361,7 @@ phase: 1+3
 > flag による権限昇格の防止)。
 
 guild フィールドは Phase 5c-1 (ADR-0019) で追加。
+workspace フィールドは Phase 5d-2 (ADR-0022) で追加。
 EOF
 
 # Phase 5c-2 P1 fix (#91 Codex): Mind の persona / guild の authoritative
@@ -291,6 +381,7 @@ mind_name: ${MIND_NAME}
 kind: ${KIND}
 persona: ${PERSONA}
 guild: ${GUILD}
+workspace: ${WORKSPACE}
 spawned_at: ${SPAWNED_AT}
 ---
 
@@ -301,7 +392,8 @@ kill-mind.sh のみが本ファイルを書き換える。
 
 このファイルが axiom 強制 (guildmaster-only-spawn / claim-only-own-guild /
 read-others-inbox-only-by-guildmaster) の根拠データとして nexus.py から
-参照される。
+参照される。workspace フィールドは Phase 5d-2 (ADR-0022) で追加。
+kill-mind は本フィールドを参照して worktree のクリーンアップ要否を判定する。
 EOF
 mv "${REGISTRY_TMP}" "${REGISTRY_ENTRY}"
 echo "[spawn-mind] Mind registry entry: ${REGISTRY_ENTRY}"
@@ -336,6 +428,9 @@ cat > "${MIND_DIR}/.mcp.json" <<JSON
 JSON
 
 echo "[spawn-mind] Mind '${MIND_NAME}' is ready at ${MIND_DIR}"
+if [ "${WS_WANT_WORKTREE}" = "1" ]; then
+  echo "[spawn-mind]   workspace: '${WORKSPACE}' (vcs=git, worktree at ${MIND_DIR}/work on branch ${WS_BRANCH})"
+fi
 
 if [ "${START_LOOP}" = "1" ]; then
   # --start-loop は mind-loop.sh をバックグラウンド起動する。
@@ -388,6 +483,11 @@ else
   echo "Next step (manual):"
   echo "  cd ${MIND_DIR}"
   echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
+  if [ "${WS_WANT_WORKTREE}" = "1" ]; then
+    echo ""
+    echo "Code work directory (git worktree):"
+    echo "  cd ${MIND_DIR}/work    # on branch ${WS_BRANCH}, target repo = ${WS_REPO}"
+  fi
   echo ""
   echo "Or start the external loop (ADR-0010):"
   echo "  ${SCRIPT_DIR}/mind-loop.sh ${MIND_NAME}"
