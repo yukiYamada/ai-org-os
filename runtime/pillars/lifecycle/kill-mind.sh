@@ -124,6 +124,50 @@ if [ -f "${REGISTRY_ENTRY}" ]; then
   echo "[kill-mind] Removed registry entry (authoritative): ${REGISTRY_ENTRY}"
 fi
 
+# Phase 5d-3 (ADR-0022): git worktree のクリーンアップ。
+# Mindspace 直下に `work/` subdir があり、その中の `.git` が file (= worktree
+# marker) なら spawn-mind が作った worktree。そこに記録されている repo path
+# を読んで `git worktree remove --force` で登録解除する。
+# 設計の意図:
+# - workspace.py は不要 (= template が削除/移動済でも cleanup できる、
+#   self-describing な worktree marker file から repo を逆引きする)
+# - registry 削除 *後* に worktree remove を試みる (registry-first invariant
+#   を守る、Codex P2 #91 の原則)
+# - worktree remove 失敗 (repo 消失等) は WARN で続行 (= Mindspace rm を
+#   block しない、kill の最終目的は Mindspace の物理削除)
+# - rm -rf Mindspace の *前* に worktree remove する必要がある:
+#   git は path 経由で .git/worktrees/<name>/ 登録を辿るため、Mindspace を
+#   先に消すと git は path から repo を見つけられず、登録が orphan する
+WORK_DIR="${MIND_DIR}/work"
+WORK_GIT_MARKER="${WORK_DIR}/.git"
+if [ -f "${WORK_GIT_MARKER}" ]; then
+  # worktree marker file は最初の行に `gitdir: <repo>/.git/worktrees/<name>`
+  # の形式で repo の git dir path を持つ (git linked-worktree の標準形式)
+  GITDIR_LINE="$(head -1 "${WORK_GIT_MARKER}" 2>/dev/null || true)"
+  if [[ "${GITDIR_LINE}" == gitdir:* ]]; then
+    # `gitdir: <path>` から <path> を抽出 (前後 whitespace を除去)
+    WORK_GITDIR="${GITDIR_LINE#gitdir:}"
+    WORK_GITDIR="${WORK_GITDIR# }"
+    # GITDIR_PATH = <repo>/.git/worktrees/<name>
+    # → repo path は dir 2 段上 (<repo>)
+    WORK_REPO_GITDIR="$(dirname "$(dirname "${WORK_GITDIR}")")"
+    WORK_REPO="$(dirname "${WORK_REPO_GITDIR}")"
+    if [ -d "${WORK_REPO}/.git" ] || [ -f "${WORK_REPO}/.git" ]; then
+      echo "[kill-mind] Removing git worktree: ${WORK_DIR} (repo: ${WORK_REPO})"
+      if ! git -C "${WORK_REPO}" worktree remove --force "${WORK_DIR}" 2>&1; then
+        echo "[WARN] git worktree remove failed; '${WORK_REPO}/.git/worktrees/' may have an orphan entry." >&2
+        echo "[HINT] After kill, run: git -C ${WORK_REPO} worktree prune" >&2
+      fi
+    else
+      echo "[WARN] worktree marker points at ${WORK_REPO} but that is no longer a git repo." >&2
+      echo "[HINT] Skipping worktree cleanup; Mindspace will still be removed." >&2
+    fi
+  else
+    echo "[WARN] ${WORK_GIT_MARKER} does not look like a git worktree marker (no 'gitdir:' line)." >&2
+    echo "[HINT] Skipping worktree cleanup; Mindspace will still be removed." >&2
+  fi
+fi
+
 echo "[kill-mind] Destroying Mindspace at ${MIND_DIR}"
 rm -rf "${MIND_DIR}"
 
