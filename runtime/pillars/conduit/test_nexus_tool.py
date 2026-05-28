@@ -463,6 +463,149 @@ class TestSpawnMindGuildmasterAxiom(unittest.TestCase):
         # 成功扱いになっていること (= 回帰時はここで {ok: false, error: TypeError} になる)
         self.assertTrue(out.get("ok"), out)
 
+    def test_spawn_inherits_caller_workspace(self) -> None:
+        """Phase 5d-6 (#104 dogfooding fix): spawn_mind の workspace 引数省略時、
+        caller (gm) の registry workspace が継承され spawn-mind.sh に
+        --workspace で渡される。
+
+        旧実装は spawn-mind.sh が --workspace 引数なしで呼ばれ、Guild manifest
+        fallback (= default) になっていた。team 環境の連続性が壊れる。
+        """
+        from unittest import mock  # noqa: PLC0415
+        import subprocess as _sp  # noqa: PLC0415
+
+        # gm の registry に workspace: developer-default を仕込む
+        reg_dir = self.home / "registry" / "minds"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "gm.md").write_text(
+            "---\nmind_name: gm\nkind: generic\npersona: guildmaster\n"
+            "guild: default\nworkspace: developer-default\n---\n",
+            encoding="utf-8",
+        )
+        # Mindspace 内 .mind-meta.md も (informational copy)
+        ms = self.home / "minds" / "gm"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / ".mind-meta.md").write_text(
+            "---\nmind_name: gm\nkind: generic\npersona: guildmaster\n"
+            "guild: default\n---\n",
+            encoding="utf-8",
+        )
+
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args[0] if args else None
+            class _Proc:
+                returncode = 0
+                stdout = "ok\n"
+                stderr = ""
+            return _Proc()
+
+        with mock.patch.object(_sp, "run", side_effect=fake_run):
+            out = self._call(
+                "spawn_mind",
+                {
+                    "mind_name": "gm", "new_mind_name": "worker",
+                    "kind": "generic", "persona": "designer",
+                },
+            )
+        self.assertTrue(out.get("ok"), out)
+        # caller の workspace が継承されて --workspace で渡される
+        argv = captured.get("args") or []
+        self.assertIn("--workspace", argv)
+        idx = argv.index("--workspace")
+        self.assertEqual(argv[idx + 1], "developer-default")
+        # 戻り値にも workspace が含まれる
+        self.assertEqual(out.get("workspace"), "developer-default")
+
+    def test_spawn_explicit_workspace_overrides_inheritance(self) -> None:
+        """Phase 5d-6: 明示 workspace 引数は caller の値より優先される。"""
+        from unittest import mock  # noqa: PLC0415
+        import subprocess as _sp  # noqa: PLC0415
+
+        # gm の registry workspace は developer-default
+        _write_mind_meta(self.home, "gm", guild="default", persona="guildmaster")
+        reg_dir = self.home / "registry" / "minds"
+        (reg_dir / "gm.md").write_text(
+            "---\nmind_name: gm\nkind: generic\npersona: guildmaster\n"
+            "guild: default\nworkspace: developer-default\n---\n",
+            encoding="utf-8",
+        )
+
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args[0] if args else None
+            class _Proc:
+                returncode = 0
+                stdout = "ok\n"
+                stderr = ""
+            return _Proc()
+
+        with mock.patch.object(_sp, "run", side_effect=fake_run):
+            out = self._call(
+                "spawn_mind",
+                {
+                    "mind_name": "gm", "new_mind_name": "analyst",
+                    "kind": "generic", "persona": "designer",
+                    "workspace": "readonly-analysis",  # override
+                },
+            )
+        self.assertTrue(out.get("ok"), out)
+        argv = captured.get("args") or []
+        self.assertIn("--workspace", argv)
+        idx = argv.index("--workspace")
+        # 明示 readonly-analysis が継承を上書き
+        self.assertEqual(argv[idx + 1], "readonly-analysis")
+        self.assertEqual(out.get("workspace"), "readonly-analysis")
+
+    def test_spawn_no_workspace_omits_argument(self) -> None:
+        """Phase 5d-6: caller に workspace 無し + 引数無し → --workspace は
+        spawn-mind に渡さない (= spawn-mind.sh が Guild manifest / default に
+        fallback する)。後方互換のため。
+        """
+        from unittest import mock  # noqa: PLC0415
+        import subprocess as _sp  # noqa: PLC0415
+
+        # gm の registry に workspace フィールド無し (= Phase 5d-2 以前形式)
+        reg_dir = self.home / "registry" / "minds"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "gm.md").write_text(
+            "---\nmind_name: gm\nkind: generic\npersona: guildmaster\n"
+            "guild: default\n---\n",
+            encoding="utf-8",
+        )
+        ms = self.home / "minds" / "gm"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / ".mind-meta.md").write_text(
+            "---\nmind_name: gm\nkind: generic\npersona: guildmaster\n"
+            "guild: default\n---\n",
+            encoding="utf-8",
+        )
+
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args[0] if args else None
+            class _Proc:
+                returncode = 0
+                stdout = "ok\n"
+                stderr = ""
+            return _Proc()
+
+        with mock.patch.object(_sp, "run", side_effect=fake_run):
+            out = self._call(
+                "spawn_mind",
+                {
+                    "mind_name": "gm", "new_mind_name": "worker",
+                    "kind": "generic", "persona": "designer",
+                },
+            )
+        self.assertTrue(out.get("ok"), out)
+        argv = captured.get("args") or []
+        # --workspace 引数が渡されていない
+        self.assertNotIn("--workspace", argv)
+
 
 @unittest.skipUnless(_MCP_AVAILABLE, "mcp package not installed; skip nexus tool tests")
 class TestKillMindGuildmasterAxiom(unittest.TestCase):
