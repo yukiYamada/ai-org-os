@@ -168,7 +168,29 @@ if [ -f "${WORK_GIT_MARKER}" ]; then
   fi
 fi
 
+# Phase 5d-7 (ADR-0023 / #104): Mind と運命を共にする dispatch 履歴の削除。
+# ADR-0023 で確定した原則「Mind identity = spawn-kill 期間に限定、同名再
+# spawn は別 Mind」に従い、conduit-storage/{inbox,archive}/<mind>/ も Mind の
+# 所有物として削除する。これにより:
+# - 再 spawn 時に古い dispatch が紛れ込まない (= dogfooding 2026-05-28 で
+#   検出された混乱の解消)
+# - Mindspace と dispatch 履歴が同じ life cycle を持つ semantic 統一
+# 順序: registry 削除の **後** に置く (= registry-first invariant を守りつつ、
+# Mindspace rm より前に走らせて「死後にも観測 file が残る」状態を避ける)。
+# 失敗時は WARN + 続行 (= kill の本旨 = Mindspace 削除を block しない)。
+CONDUIT_INBOX_DIR="${RUNTIME_HOME}/conduit-storage/inbox/${MIND_NAME}"
+CONDUIT_ARCHIVE_DIR="${RUNTIME_HOME}/conduit-storage/archive/${MIND_NAME}"
+for dispatch_dir in "${CONDUIT_INBOX_DIR}" "${CONDUIT_ARCHIVE_DIR}"; do
+  if [ -d "${dispatch_dir}" ]; then
+    if ! rm -rf "${dispatch_dir}"; then
+      echo "[WARN] Failed to remove dispatch dir ${dispatch_dir}; manual cleanup may be needed." >&2
+    else
+      echo "[kill-mind] Removed dispatch dir: ${dispatch_dir}"
+    fi
+  fi
+done
+
 echo "[kill-mind] Destroying Mindspace at ${MIND_DIR}"
 rm -rf "${MIND_DIR}"
 
-echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace is irrecoverable."
+echo "[kill-mind] Mind '${MIND_NAME}' is gone. Its Mindspace and dispatch history are irrecoverable."
