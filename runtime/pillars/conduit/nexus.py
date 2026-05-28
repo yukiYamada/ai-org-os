@@ -187,7 +187,10 @@ async def list_tools() -> list[Tool]:
                 "'guildmaster' may call this. Otherwise code='forbidden'. "
                 "Internally invokes spawn-mind.sh with --guild equal to the "
                 "caller's own guild (cross-guild spawn is not permitted in v0.1). "
-                "kind / persona must be allowed by the Guild's manifest."
+                "kind / persona must be allowed by the Guild's manifest. "
+                "Workspace defaults to the caller's own workspace (= team "
+                "environment inheritance, Phase 5d-6 / dogfooding fix); "
+                "explicit `workspace` arg overrides it (ADR-0022)."
             ),
             inputSchema={
                 "type": "object",
@@ -207,6 +210,15 @@ async def list_tools() -> list[Tool]:
                     "persona": {
                         "type": "string",
                         "description": "Persona of the new Mind (must be allowed by Guild manifest).",
+                    },
+                    "workspace": {
+                        "type": "string",
+                        "description": (
+                            "Optional workspace template (ADR-0022). If omitted, "
+                            "the new Mind inherits the caller's own workspace "
+                            "(= team environment continuity). Explicit value "
+                            "overrides this inheritance."
+                        ),
                     },
                 },
                 "required": ["mind_name", "new_mind_name", "kind", "persona"],
@@ -499,11 +511,17 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
             new_mind_name = args["new_mind_name"]
             kind = args["kind"]
             persona = args["persona"]
+            # Phase 5d-6 (#104 dogfooding fix): optional workspace 引数。
+            # 省略時は caller の workspace を継承する (= team 環境継続)。
+            # 明示時はそれが最優先 (spawn-mind.sh の解決順 #1 と整合)。
+            workspace_arg = args.get("workspace")
             # 入力形式検証 (path traversal 等)
             _validate_mind_name(mind_name, "mind_name")
             _validate_mind_name(new_mind_name, "new_mind_name")
             _validate_mind_name(kind, "kind")
             _validate_mind_name(persona, "persona")
+            if workspace_arg is not None:
+                _validate_mind_name(workspace_arg, "workspace")
             # identity binding (bound 時のみ効く)
             _nexus.assert_identity(mind_name)
             # axiom: guildmaster-only-spawn
@@ -530,6 +548,28 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                 # 存在する。なので requester_guild も None ではないはず。
                 # defense in depth: 万一 None なら internal_error。
                 requester_guild = _get_mind_guild(mind_name)
+                # Phase 5d-6 (#104): caller の workspace を読む。Mind の
+                # registry entry の workspace フィールドが authoritative
+                # source (Phase 5d-2 で spawn-mind が registry に書き込む)。
+                # MCP 引数 > 継承 > spawn-mind.sh 側 fallback (Guild manifest
+                # → default) の優先順位を保つ。
+                from guild import _read_mind_meta_field  # noqa: PLC0415
+
+                requester_workspace = ""
+                if workspace_arg:
+                    requester_workspace = workspace_arg  # 明示優先
+                else:
+                    # caller の registry から workspace を継承
+                    import os as _os  # noqa: PLC0415
+                    home = _os.environ.get("AI_ORG_OS_HOME") or (
+                        _os.environ.get("HOME") or _os.environ.get("USERPROFILE") or "."
+                    )
+                    reg_path = Path(home) / ("registry/minds/" + mind_name + ".md") \
+                        if _os.environ.get("AI_ORG_OS_HOME") \
+                        else Path(home) / ".ai-org-os" / "registry" / "minds" / (mind_name + ".md")
+                    inherited = _read_mind_meta_field(reg_path, "workspace")
+                    if inherited:
+                        requester_workspace = inherited
                 import subprocess  # noqa: PLC0415
                 spawn_sh = (
                     _RUNTIME_DIR / "pillars" / "lifecycle" / "spawn-mind.sh"
@@ -562,12 +602,19 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                         # なる (2026-05-26 dogfooding で実機検出)。
                         # encoding="utf-8" を明示し、念のため errors="replace"
                         # で decode 不能 byte は U+FFFD に置換して落とさない。
+                        spawn_argv = [
+                            "bash", str(spawn_sh),
+                            "--guild", requester_guild,
+                        ]
+                        if requester_workspace:
+                            # Phase 5d-6 (#104): caller の workspace を継承
+                            # (or 明示引数で override) として spawn-mind に
+                            # 渡す。spawn-mind 側の解決順 #1 (引数最優先)
+                            # に乗る形。
+                            spawn_argv.extend(["--workspace", requester_workspace])
+                        spawn_argv.extend([kind, persona, new_mind_name])
                         proc = subprocess.run(
-                            [
-                                "bash", str(spawn_sh),
-                                "--guild", requester_guild,
-                                kind, persona, new_mind_name,
-                            ],
+                            spawn_argv,
                             capture_output=True,
                             text=True,
                             encoding="utf-8",
@@ -593,6 +640,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                                 "kind": kind,
                                 "persona": persona,
                                 "guild": requester_guild,
+                                # Phase 5d-6 (#104): 実際に使われた workspace を
+                                # 戻り値に含める (継承だったのか明示だったのか
+                                # caller 側で確認できるよう)。
+                                "workspace": (
+                                    requester_workspace
+                                    if requester_workspace
+                                    else "(spawn-mind fallback: Guild or default)"
+                                ),
                                 "spawned_by": mind_name,
                                 "stdout_tail": proc.stdout[-500:],
                             }
