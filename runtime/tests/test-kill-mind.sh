@@ -191,6 +191,70 @@ git -C "${TEST_REPO_DIR}" worktree prune 2>/dev/null || true
 # fixture cleanup
 rm -rf "${AI_ORG_OS_HOME}/workspaces" "${TEST_REPO_DIR}"
 
+echo "[case] 7. kill 時に conduit-storage/{inbox,archive}/<mind>/ も削除される (Phase 5d-7 / ADR-0023 / #104)"
+# Mind を spawn し、conduit-storage の inbox / archive に dispatch を
+# 手動で書く (= 他 Mind から送られた状態を模倣)。kill 後に両 dir が消える
+# ことを確認する。
+mind_ds="${TEST_ID}-with-dispatch"
+"${SPAWN}" generic designer "${mind_ds}" >/dev/null
+mind_ds_dir="${AI_ORG_OS_HOME}/minds/${mind_ds}"
+if [ ! -d "${mind_ds_dir}" ]; then
+  FAIL=$((FAIL + 1))
+  FAIL_MSGS+=("setup: spawn failed for ${mind_ds}")
+  echo "  [NG]   setup: spawn failed"
+else
+  inbox_dir="${AI_ORG_OS_HOME}/conduit-storage/inbox/${mind_ds}"
+  archive_dir="${AI_ORG_OS_HOME}/conduit-storage/archive/${mind_ds}"
+  mkdir -p "${inbox_dir}" "${archive_dir}"
+  # 模擬 dispatch (dispatch-format.md に倣う最小 frontmatter)
+  cat > "${inbox_dir}/20260528T120000Z-from-other-000a.md" <<EOF
+---
+from: other-mind
+to: ${mind_ds}
+topic: stale dispatch
+dispatched_at: 2026-05-28T12:00:00Z
+msg_id: 20260528T120000Z-from-other-000a
+---
+hi
+EOF
+  cat > "${archive_dir}/20260528T110000Z-from-other-000b.md" <<EOF
+---
+from: other-mind
+to: ${mind_ds}
+topic: old acked
+dispatched_at: 2026-05-28T11:00:00Z
+msg_id: 20260528T110000Z-from-other-000b
+---
+old
+EOF
+  if [ ! -f "${inbox_dir}/20260528T120000Z-from-other-000a.md" ] || \
+     [ ! -f "${archive_dir}/20260528T110000Z-from-other-000b.md" ]; then
+    FAIL=$((FAIL + 1))
+    FAIL_MSGS+=("setup: dispatch fixture not created")
+    echo "  [NG]   setup: dispatch fixture missing"
+  else
+    PASS=$((PASS + 1))
+    echo "  [ok]   setup: dispatch dirs populated"
+  fi
+  # kill (ADR-0023 で追加された経路で dispatch も削除されるはず)
+  set +e; "${KILL}" "${mind_ds}" >/dev/null 2>&1; code=$?; set -e
+  assert_exit_code "kill with dispatch history" 0 "${code}"
+  assert_dir_absent "Mindspace gone" "${mind_ds_dir}"
+  # ADR-0023 §2: dispatch 履歴も削除される (本 PR で追加)
+  assert_dir_absent "conduit-storage/inbox/<mind>/ gone" "${inbox_dir}"
+  assert_dir_absent "conduit-storage/archive/<mind>/ gone" "${archive_dir}"
+fi
+
+echo "[case] 8. dispatch 履歴の無い Mind を kill しても失敗しない (Phase 5d-7)"
+# 何も dispatch していない quiet Mind を kill しても rm -rf の対象が無く
+# ても OK であることを確認 (= 存在しない dir に対して失敗しない)。
+mind_quiet="${TEST_ID}-quiet"
+"${SPAWN}" generic designer "${mind_quiet}" >/dev/null
+mind_quiet_dir="${AI_ORG_OS_HOME}/minds/${mind_quiet}"
+set +e; "${KILL}" "${mind_quiet}" >/dev/null 2>&1; code=$?; set -e
+assert_exit_code "kill quiet mind (no dispatch)" 0 "${code}"
+assert_dir_absent "Mindspace gone (quiet)" "${mind_quiet_dir}"
+
 echo ""
 echo "[summary] passed: ${PASS}, failed: ${FAIL}"
 if [ "${FAIL}" -gt 0 ]; then
