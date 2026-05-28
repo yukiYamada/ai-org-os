@@ -620,16 +620,19 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                             encoding="utf-8",
                             errors="replace",
                             # Windows + bash + multiple Python child processes
-                            # (registry.py check / guild.py validate) で 15s
-                            # 程度かかる場合がある。30s は dogfooding 環境で
-                            # margin 不足のため 60s に拡大 (Windows 上での
-                            # spawn-mind 実測 ~15s)。
-                            timeout=60,
+                            # (registry.py check / guild.py validate /
+                            # workspace.py show) + git worktree add で実測 ~60s
+                            # を超えるケースが発生 (Phase 5d-6 dogfooding 2026-05-28)。
+                            # 60s は workspace モード spawn で margin 不足、
+                            # 120s に拡大して Mindspace + worktree + registry
+                            # の全 step が完了する余裕を確保する。
+                            # Linux CI では 5s 程度なので影響無し。
+                            timeout=120,
                         )
                     except subprocess.TimeoutExpired:
                         result = {
                             "ok": False,
-                            "error": "spawn-mind.sh timed out (60s)",
+                            "error": "spawn-mind.sh timed out (120s)",
                             "code": "internal_error",
                         }
                     else:
@@ -764,18 +767,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                             # が混入したら spawn_mind と同じ症状になる
                             # (dogfooding 2026-05-26 で spawn_mind 側を実機検出、
                             # 予防的に kill_mind も同時に修正)。
+                            # spawn と対称に 120s に拡大 (Phase 5d-6 dogfooding
+                            # 2026-05-28 で spawn 側を実機検出、kill 側も予防的に)。
+                            # kill は worktree remove + Mindspace rm + 旧 mind-loop
+                            # の stop 等で複数 process を呼ぶため、Windows では
+                            # 60s margin が将来不足する可能性がある。
                             proc = subprocess.run(
                                 ["bash", str(kill_sh), target_mind],
                                 capture_output=True,
                                 text=True,
                                 encoding="utf-8",
                                 errors="replace",
-                                timeout=60,
+                                timeout=120,
                             )
                         except subprocess.TimeoutExpired:
                             result = {
                                 "ok": False,
-                                "error": "kill-mind.sh timed out (60s)",
+                                "error": "kill-mind.sh timed out (120s)",
                                 "code": "internal_error",
                             }
                         else:
