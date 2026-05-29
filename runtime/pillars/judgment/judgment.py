@@ -270,8 +270,22 @@ def _parse_response(text: str, expected_names: list[str]) -> list[MindJudgment]:
                     f"entry {i} has action=dispatch-prompt but missing/empty "
                     f"dispatch_body\nraw: {raw_snippet}"
                 )
+            # 改行正規化 (Codex P1 of Phase 5e Step B self-review):
+            # topic は Conduit Pillar 側で改行 reject される (frontmatter 破壊
+            # = identity 偽装防止)。LLM 出力が改行を含むと storage 側で
+            # ValueError になり dispatch が常に失敗する UX 劣化を避けるため、
+            # 判定の手前で space に正規化しておく。strip で前後 whitespace も
+            # 除去 (空文字になるなら _parse_response の必須チェックで救う)。
+            topic_normalized = (
+                topic_raw.replace("\n", " ").replace("\r", " ").strip()
+            )
+            if not topic_normalized:
+                raise JudgmentParseError(
+                    f"entry {i} dispatch_topic became empty after newline "
+                    f"normalization\nraw: {raw_snippet}"
+                )
             # 上限切り捨て (LLM が暴走しても安全側に倒す)
-            dispatch_topic = topic_raw[:MAX_DISPATCH_TOPIC_LEN]
+            dispatch_topic = topic_normalized[:MAX_DISPATCH_TOPIC_LEN]
             dispatch_body = body_raw[:MAX_DISPATCH_BODY_LEN]
 
         result.append(

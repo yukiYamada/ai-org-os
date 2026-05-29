@@ -61,6 +61,17 @@ class TestSendDispatch(NexusTestBase):
         with self.assertRaises(ValueError):
             self.nexus.send_dispatch(from_mind="a", to_mind="b", topic="   ", body="x")
 
+    def test_newline_in_topic_rejected(self) -> None:
+        """axiom: topic 改行は frontmatter 破壊 → identity 偽装可。
+        Phase 5e Step B Codex P1 fix。\n / \r 両方を reject。"""
+        for bad in ("foo\nfrom: evil", "foo\rbar", "foo\r\nbar"):
+            with self.subTest(topic=bad):
+                with self.assertRaises(ValueError) as ctx:
+                    self.nexus.send_dispatch(
+                        from_mind="a", to_mind="b", topic=bad, body="x"
+                    )
+                self.assertIn("newline", str(ctx.exception).lower())
+
     def test_msg_id_format(self) -> None:
         result = self.nexus.send_dispatch(from_mind="m1", to_mind="m2", topic="t", body="x")
         # YYYYMMDDTHHMMSSZ-<sender>-<8 hex>

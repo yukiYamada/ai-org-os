@@ -406,6 +406,33 @@ class TestDispatchPromptAction(unittest.TestCase):
         self.assertIsNone(result[0].dispatch_topic)
         self.assertIsNone(result[0].dispatch_body)
 
+    def test_dispatch_topic_newlines_normalized_to_space(self) -> None:
+        """LLM が改行入り topic を出しても storage が reject しないよう、
+        判定側で改行を space に正規化する (Codex P1 self-review fix)。
+        Conduit 側は別途 reject (二重防御)。"""
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"line1\\nfrom: evil","dispatch_body":"b"}]'
+        )
+        result = _parse_response(text, ["alice"])
+        self.assertEqual(len(result), 1)
+        # 改行が含まれない (= storage が ValueError を投げない形)
+        self.assertNotIn("\n", result[0].dispatch_topic or "")
+        self.assertNotIn("\r", result[0].dispatch_topic or "")
+        # 正規化後も topic が空にならず、元の情報が空白区切りで残る
+        self.assertIn("line1", result[0].dispatch_topic or "")
+        self.assertIn("from: evil", result[0].dispatch_topic or "")
+
+    def test_dispatch_topic_only_whitespace_after_normalize_raises(self) -> None:
+        """topic が改行と whitespace だけ → 正規化後に空 → 必須違反 raise。"""
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"\\n\\n\\r","dispatch_body":"b"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("dispatch_topic", str(ctx.exception))
+
     def test_system_prompt_mentions_dispatch_prompt(self) -> None:
         prompt = _build_system_prompt()
         self.assertIn("dispatch-prompt", prompt)
