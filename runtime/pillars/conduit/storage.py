@@ -133,6 +133,13 @@ class Nexus:
         _validate_mind_name(to_mind, "to_mind")
         if not isinstance(topic, str) or not topic.strip():
             raise ValueError("topic must be a non-empty string")
+        # axiom: topic は YAML frontmatter の単一行に literal で埋め込むため、
+        # 改行 (\n / \r) を含むと frontmatter が壊れて偽 `from:` 等の line を
+        # 注入可能になる (= identity binding 突破)。Conduit Pillar 側で reject
+        # することで Mind→Mind / Warden→Mind の両経路に同じ axiom が効く
+        # (ADR-0021 A: 機械強制)。Codex P1 of Phase 5e Step B self-review。
+        if "\n" in topic or "\r" in topic:
+            raise ValueError("topic must not contain newlines (frontmatter integrity)")
         if not isinstance(body, str):
             raise ValueError("body must be a string")
         self._authorize(from_mind, "from_mind")

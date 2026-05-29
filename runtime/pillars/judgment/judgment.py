@@ -43,13 +43,26 @@ DEFAULT_TEMPERATURE = 0.0  # 決定論的、ADR-0010 §5 と整合
 DEFAULT_TIMEOUT_S = 30.0
 
 # Mind に対する判定の語彙。ADR-0013 §3 の対処グラデーションと整合する。
-# 本 Phase ではまだ「実行」は呼び出し側に委ねており、判定のみ。
+# Phase 5e Step A までは観察寄り (passive) のみ。Step B で
+# `dispatch-prompt` を追加: Judgment が判断した結果として Mind に
+# 直接 prompt を投げる active action (= Warden が actuator として
+# Mind に介入する最初の経路、ADR-0010 §5 の「無制約観測」を超えて
+# 「観察→判断→動かす」のループを閉じる最初の一歩)。
 VALID_ACTIONS = frozenset({
     "ok",            # 問題なし、何もしない
     "monitor",       # 経過観察、次回 cycle で再判定
     "investigate",   # 何か変、詳細観測が必要（人間判断対象）
+    "dispatch-prompt",  # Step B: Mind に prompt を投げる (Warden actuator)
     "notify-human",  # 致命的、ADR-0012 責務 5 ルート
 })
+
+# dispatch-prompt の body 上限。LLM が暴走して大量 prompt を作らない安全弁。
+MAX_DISPATCH_BODY_LEN = 1000
+MAX_DISPATCH_TOPIC_LEN = 100
+
+# dispatch-prompt 時の sender 識別子。固定 (= LLM が偽装できない)。
+# storage._VALID_NAME_RE: [A-Za-z0-9._-]{1,64} に match。
+WARDEN_SENDER_NAME = "warden"
 
 
 class AnthropicNotConfigured(RuntimeError):
@@ -65,11 +78,19 @@ class JudgmentParseError(ValueError):
 
 @dataclass(frozen=True)
 class MindJudgment:
-    """1 Mind に対する判定結果。"""
+    """1 Mind に対する判定結果。
+
+    Phase 5e Step B (#109 続編): action="dispatch-prompt" のとき、optional
+    `dispatch_topic` / `dispatch_body` を持つ。これらは Conductor が
+    send_dispatch する内容で、Warden actuator の最初の経路。
+    他 action では None (= 既存挙動と完全互換、副作用なし)。
+    """
 
     mind_name: str
     action: str  # VALID_ACTIONS のいずれか
     reason: str
+    dispatch_topic: str | None = None
+    dispatch_body: str | None = None
 
 
 def _build_system_prompt() -> str:
@@ -96,11 +117,16 @@ The report MAY include any of these sections (use what is present, ignore what i
                  if I1/I2 are present, treat as soft signal (monitor or investigate)
 
 You MUST respond with a single JSON array, no prose, no markdown fences. Each element
-must be an object with exactly these keys:
+must be an object with these keys:
   - "mind_name": string, must match a mind from input "minds"
-  - "action": one of "ok", "monitor", "investigate", "notify-human"
+  - "action": one of "ok", "monitor", "investigate", "dispatch-prompt", "notify-human"
   - "reason": short string, why you chose that action (max 200 chars).
               Cite the signal you relied on (e.g., "W3 orphan kind", "no recent inbound")
+
+If action is "dispatch-prompt", you MUST also include:
+  - "dispatch_topic": short subject line (max 100 chars)
+  - "dispatch_body":  the prompt message body (max 1000 chars)
+For other actions, omit these fields (or leave them null).
 
 Action vocabulary (ordered by escalation):
   - "ok": Mind looks healthy, no attention needed
@@ -108,6 +134,14 @@ Action vocabulary (ordered by escalation):
   - "investigate": Something is off — needs deeper observation
                    (e.g., W2/W3 anomalies, long stale + unread, no inbound dispatch,
                     abnormal resource growth). A human or Warden should look.
+  - "dispatch-prompt": Send a short message FROM "warden" TO this Mind via
+                       the Conduit Pillar's send_dispatch. Use when the Mind needs
+                       a nudge or question that does NOT require human attention.
+                       Examples: "long silence — what is your current focus?",
+                       "you have N unread issues, please claim or skip them",
+                       "I detected unusual file growth in your workspace, please clarify".
+                       Do NOT use for critical issues (use "notify-human").
+                       Do NOT use to issue commands to OTHER Minds (only this Mind).
   - "notify-human": Critical — failsafe path (ADR-0012 responsibility 5). Use sparingly.
 
 Be decisive. Do not output explanations outside the JSON. If "minds" is empty, return [].
@@ -217,11 +251,50 @@ def _parse_response(text: str, expected_names: list[str]) -> list[MindJudgment]:
             raise JudgmentParseError(
                 f"entry {i} has duplicate mind_name '{mind_name}'\nraw: {raw_snippet}"
             )
+
+        # Phase 5e Step B: dispatch-prompt action は body / topic が必須。
+        # 他 action では None で固定 (= 存在しても無視、副作用なし)。
+        action_str = str(entry["action"])
+        dispatch_topic: str | None = None
+        dispatch_body: str | None = None
+        if action_str == "dispatch-prompt":
+            topic_raw = entry.get("dispatch_topic")
+            body_raw = entry.get("dispatch_body")
+            if not topic_raw or not isinstance(topic_raw, str):
+                raise JudgmentParseError(
+                    f"entry {i} has action=dispatch-prompt but missing/empty "
+                    f"dispatch_topic\nraw: {raw_snippet}"
+                )
+            if not body_raw or not isinstance(body_raw, str):
+                raise JudgmentParseError(
+                    f"entry {i} has action=dispatch-prompt but missing/empty "
+                    f"dispatch_body\nraw: {raw_snippet}"
+                )
+            # 改行正規化 (Codex P1 of Phase 5e Step B self-review):
+            # topic は Conduit Pillar 側で改行 reject される (frontmatter 破壊
+            # = identity 偽装防止)。LLM 出力が改行を含むと storage 側で
+            # ValueError になり dispatch が常に失敗する UX 劣化を避けるため、
+            # 判定の手前で space に正規化しておく。strip で前後 whitespace も
+            # 除去 (空文字になるなら _parse_response の必須チェックで救う)。
+            topic_normalized = (
+                topic_raw.replace("\n", " ").replace("\r", " ").strip()
+            )
+            if not topic_normalized:
+                raise JudgmentParseError(
+                    f"entry {i} dispatch_topic became empty after newline "
+                    f"normalization\nraw: {raw_snippet}"
+                )
+            # 上限切り捨て (LLM が暴走しても安全側に倒す)
+            dispatch_topic = topic_normalized[:MAX_DISPATCH_TOPIC_LEN]
+            dispatch_body = body_raw[:MAX_DISPATCH_BODY_LEN]
+
         result.append(
             MindJudgment(
                 mind_name=mind_name,
-                action=str(entry["action"]),
+                action=action_str,
                 reason=str(entry["reason"])[:200],
+                dispatch_topic=dispatch_topic,
+                dispatch_body=dispatch_body,
             )
         )
         seen.add(mind_name)

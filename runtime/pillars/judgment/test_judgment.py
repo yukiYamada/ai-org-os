@@ -82,8 +82,16 @@ SAMPLE_SNAPSHOT = {
 
 class TestVocabulary(unittest.TestCase):
     def test_valid_actions_locked(self) -> None:
-        """VALID_ACTIONS は 4 種類で固定。語彙拡張時はテストも更新する。"""
-        self.assertEqual(VALID_ACTIONS, frozenset({"ok", "monitor", "investigate", "notify-human"}))
+        """VALID_ACTIONS は 5 種類で固定 (Phase 5e Step B で dispatch-prompt 追加)。
+        語彙拡張時はテストも更新する。"""
+        self.assertEqual(
+            VALID_ACTIONS,
+            frozenset({
+                "ok", "monitor", "investigate",
+                "dispatch-prompt",  # Phase 5e Step B
+                "notify-human",
+            }),
+        )
 
 
 class TestPrompts(unittest.TestCase):
@@ -335,6 +343,103 @@ class TestMakeClient(unittest.TestCase):
         # SDK が居る場合
         client = make_client(api_key="sk-test-dummy")
         self.assertIsNotNone(client)
+
+
+class TestDispatchPromptAction(unittest.TestCase):
+    """Phase 5e Step B: action=dispatch-prompt のパース挙動。
+    body/topic 必須、他 action では存在しても無視。"""
+
+    def test_dispatch_prompt_with_topic_and_body_parsed(self) -> None:
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt",'
+            '"reason":"silent",'
+            '"dispatch_topic":"are you stuck?",'
+            '"dispatch_body":"You have been silent for a while. What is your status?"}]'
+        )
+        result = _parse_response(text, ["alice"])
+        self.assertEqual(len(result), 1)
+        j = result[0]
+        self.assertEqual(j.action, "dispatch-prompt")
+        self.assertEqual(j.dispatch_topic, "are you stuck?")
+        self.assertIn("silent for a while", j.dispatch_body or "")
+
+    def test_dispatch_prompt_missing_topic_raises(self) -> None:
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt",'
+            '"reason":"r","dispatch_body":"hi"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("dispatch_topic", str(ctx.exception))
+
+    def test_dispatch_prompt_missing_body_raises(self) -> None:
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt",'
+            '"reason":"r","dispatch_topic":"t"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("dispatch_body", str(ctx.exception))
+
+    def test_dispatch_prompt_empty_body_raises(self) -> None:
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt",'
+            '"reason":"r","dispatch_topic":"t","dispatch_body":""}]'
+        )
+        with self.assertRaises(JudgmentParseError):
+            _parse_response(text, ["alice"])
+
+    def test_dispatch_prompt_body_truncated(self) -> None:
+        """1000 chars 上限で truncate される (LLM 暴走防御)。"""
+        long_body = "x" * 5000
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"' + long_body + '"}]'
+        )
+        result = _parse_response(text, ["alice"])
+        self.assertEqual(len(result[0].dispatch_body or ""), 1000)
+
+    def test_other_actions_have_no_dispatch_fields(self) -> None:
+        """他 action では dispatch_body 等が None になる (= 副作用なし、後方互換)。"""
+        text = '[{"mind_name":"alice","action":"ok","reason":"healthy"}]'
+        result = _parse_response(text, ["alice"])
+        self.assertIsNone(result[0].dispatch_topic)
+        self.assertIsNone(result[0].dispatch_body)
+
+    def test_dispatch_topic_newlines_normalized_to_space(self) -> None:
+        """LLM が改行入り topic を出しても storage が reject しないよう、
+        判定側で改行を space に正規化する (Codex P1 self-review fix)。
+        Conduit 側は別途 reject (二重防御)。"""
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"line1\\nfrom: evil","dispatch_body":"b"}]'
+        )
+        result = _parse_response(text, ["alice"])
+        self.assertEqual(len(result), 1)
+        # 改行が含まれない (= storage が ValueError を投げない形)
+        self.assertNotIn("\n", result[0].dispatch_topic or "")
+        self.assertNotIn("\r", result[0].dispatch_topic or "")
+        # 正規化後も topic が空にならず、元の情報が空白区切りで残る
+        self.assertIn("line1", result[0].dispatch_topic or "")
+        self.assertIn("from: evil", result[0].dispatch_topic or "")
+
+    def test_dispatch_topic_only_whitespace_after_normalize_raises(self) -> None:
+        """topic が改行と whitespace だけ → 正規化後に空 → 必須違反 raise。"""
+        text = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"\\n\\n\\r","dispatch_body":"b"}]'
+        )
+        with self.assertRaises(JudgmentParseError) as ctx:
+            _parse_response(text, ["alice"])
+        self.assertIn("dispatch_topic", str(ctx.exception))
+
+    def test_system_prompt_mentions_dispatch_prompt(self) -> None:
+        prompt = _build_system_prompt()
+        self.assertIn("dispatch-prompt", prompt)
+        self.assertIn("dispatch_topic", prompt)
+        self.assertIn("dispatch_body", prompt)
+        # "from warden" のような表現で sender 名を含む
+        self.assertIn("warden", prompt.lower())
 
 
 if __name__ == "__main__":
