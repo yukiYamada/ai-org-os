@@ -303,6 +303,123 @@ class TestRunOneCycle(unittest.TestCase):
         self.assertEqual(result.judgment_status, "skipped")
 
 
+class TestActuateDispatches(unittest.TestCase):
+    """Phase 5e Step B: action=dispatch-prompt の actuator 経路。
+
+    Conduit Pillar の send_dispatch を patch して呼び出しが正しく行われる
+    ことを検証。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.snapshots_dir = Path(self.tmp.name) / "snapshots"
+        self.snapshots_dir.mkdir()
+        self.issues_dir = Path(self.tmp.name) / "issues"
+        self.issues_dir.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_dispatch_prompt_invokes_conduit_send_dispatch(self) -> None:
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"silent",'
+            '"dispatch_topic":"status?","dispatch_body":"What are you doing?"}]'
+        )
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor._send_dispatch_via_conduit") as mock_send:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        mock_send.assert_called_once()
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual(kwargs["to_mind"], "alice")
+        self.assertEqual(kwargs["topic"], "status?")
+        self.assertEqual(kwargs["body"], "What are you doing?")
+        self.assertEqual(result.dispatches_sent, 1)
+        self.assertEqual(
+            result.judgments_action_breakdown, {"dispatch-prompt": 1}
+        )
+
+    def test_dispatch_failure_does_not_abort_cycle(self) -> None:
+        """send_dispatch が 1 件失敗しても、他 Mind の dispatch は試みられ
+        cycle は完走する (ADR-0013 §1 F3)。"""
+        snapshot_payload = {
+            "minds": [
+                {"mind_name": "alice"},
+                {"mind_name": "bob"},
+            ]
+        }
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b1"},'
+            '{"mind_name":"bob","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b2"}]'
+        )
+
+        # alice には storage 異常、bob は成功する想定
+        def fake_send(*, to_mind: str, topic: str, body: str) -> None:
+            if to_mind == "alice":
+                raise RuntimeError("storage write failed")
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor._send_dispatch_via_conduit", side_effect=fake_send):
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        # bob だけが成功カウントされる
+        self.assertEqual(result.dispatches_sent, 1)
+        self.assertEqual(result.judgment_status, "ok")
+
+    def test_no_dispatch_when_no_dispatch_prompt_action(self) -> None:
+        """通常の ok / monitor 判定では send_dispatch は呼ばれない (= 後方互換)。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"ok","reason":"healthy"}]'
+        )
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor._send_dispatch_via_conduit") as mock_send:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        mock_send.assert_not_called()
+        self.assertEqual(result.dispatches_sent, 0)
+
+    def test_warden_sender_name_locked(self) -> None:
+        """sender 名は "warden" 固定 (judgment.py 側の system prompt と
+        Mind 側 inbox 観測が一致する必要があるため)。"""
+        from conductor import WARDEN_SENDER_NAME
+        self.assertEqual(WARDEN_SENDER_NAME, "warden")
+
+
 class TestWriteStatus(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

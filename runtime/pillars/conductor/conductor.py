@@ -98,6 +98,10 @@ class CycleResult:
     judgments_action_breakdown: dict[str, int]
     judgment_status: str  # "ok" / "fallback-no-key" / "fallback-error" / "skipped"
     judgment_error: str | None
+    # Phase 5e Step B: 実際に send_dispatch した件数。dispatch-prompt 判定数 と
+    # 必ずしも一致しない (送信失敗時は count されない、= 「成功した actuator
+    # 回数」)。
+    dispatches_sent: int = 0
 
 
 def _utcnow() -> dt.datetime:
@@ -132,6 +136,78 @@ def _action_breakdown(judgments: list[MindJudgment]) -> dict[str, int]:
     for j in judgments:
         breakdown[j.action] = breakdown.get(j.action, 0) + 1
     return breakdown
+
+
+# Phase 5e Step B: Warden が Mind に dispatch を送るときの sender 名。
+# Mind→Mind dispatch との区別 (= 「Warden が指示してきた」と Mind 側で
+# 識別可能) のため、固定値 "warden" を予約する。judgment.py 側の同名
+# 定数と一致させること (テストでロック)。
+WARDEN_SENDER_NAME = "warden"
+
+
+def _send_dispatch_via_conduit(
+    *, to_mind: str, topic: str, body: str
+) -> None:
+    """Conduit Pillar の Nexus.send_dispatch を呼ぶ薄いラッパ。
+
+    遅延 import: storage.py は FastMCP / pyyaml 等を間接的に引きずるため、
+    actuator 動作時のみロードする。テストでは patch 対象を
+    `conductor._send_dispatch_via_conduit` に統一できる利点もある
+    (Conduit 内部の Nexus 構築をテスト側で気にしなくていい)。
+
+    identity binding は使わない (= Nexus(identity=None)) — Warden は
+    どの Mind でもないので。authorize check は実質スキップされ、from_mind
+    の name validation のみ効く。
+    """
+    sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "conduit"))
+    from storage import Nexus  # noqa: E402
+
+    nexus = Nexus()
+    nexus.send_dispatch(
+        from_mind=WARDEN_SENDER_NAME,
+        to_mind=to_mind,
+        topic=topic,
+        body=body,
+    )
+
+
+def _actuate_dispatches(
+    judgments: list[MindJudgment], cycle_number: int
+) -> int:
+    """action=="dispatch-prompt" の判定を Conduit に流す。
+
+    返り値: **成功した** dispatch 件数。1 つの judgment の失敗が他を
+    巻き込まないように、judgment ごとに try/except する (ADR-0013 §1 F3)。
+    パース時点で dispatch_topic / dispatch_body は非 None 保証されているので
+    None チェック後は str として扱う。
+    """
+    sent = 0
+    for j in judgments:
+        if j.action != "dispatch-prompt":
+            continue
+        if not j.dispatch_topic or not j.dispatch_body:
+            # parser がここを通さない設計だが、防御的に skip。
+            print(
+                f"[conductor][cycle {cycle_number}] skip dispatch to "
+                f"{j.mind_name}: missing topic/body",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            _send_dispatch_via_conduit(
+                to_mind=j.mind_name,
+                topic=j.dispatch_topic,
+                body=j.dispatch_body,
+            )
+            sent += 1
+        except Exception as exc:  # noqa: BLE001 — actuator は止まらない
+            print(
+                f"[conductor][cycle {cycle_number}] send_dispatch to "
+                f"{j.mind_name} failed: {exc}",
+                file=sys.stderr,
+            )
+            traceback.print_exc(file=sys.stderr)
+    return sent
 
 
 def run_one_cycle(
@@ -237,6 +313,14 @@ def run_one_cycle(
                 judgment_status = "fallback-error"
                 judgment_error = str(exc)
 
+    # ---- step 5: actuator (Phase 5e Step B)
+    # 判定結果から dispatch-prompt の MindJudgment を抽出し、Conduit Pillar の
+    # send_dispatch で Mind の inbox に投入する。Warden actuator の最初の経路。
+    # 失敗 (storage 例外等) は WARN + 続行 (= Conductor が cycle を回し続ける、
+    # ADR-0013 §1 F3)。fallback 系の judgment は dispatch-prompt を含まない
+    # ので、actuator は judgment_status="ok" のときだけ実質動く。
+    dispatches_sent = _actuate_dispatches(judgments, cycle_number)
+
     ended_at = _utcnow()
     result = CycleResult(
         cycle=cycle_number,
@@ -248,6 +332,7 @@ def run_one_cycle(
         judgments_action_breakdown=_action_breakdown(judgments),
         judgment_status=judgment_status,
         judgment_error=judgment_error,
+        dispatches_sent=dispatches_sent,
     )
     return result
 
