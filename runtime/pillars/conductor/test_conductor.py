@@ -197,6 +197,90 @@ class TestRunOneCycle(unittest.TestCase):
         self.assertEqual(result.judgments_count, 2)
         self.assertEqual(result.judgments_action_breakdown, {"ok": 1, "investigate": 1})
 
+    def test_cycle_uses_realm_report_when_available(self) -> None:
+        """Phase 5e: build_realm_report が成功すると judgment_input は
+        v1.0 統合 report (= flow / anomaly 含む) になる。
+        judge_snapshot に渡される dict を spy して anomaly が含まれることを assertion。
+        """
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        realm_report = {
+            "schema_version": "1.0",
+            "generated_at": "2026-05-29T00:00:00Z",
+            "minds": [{"mind_name": "alice"}],
+            "flow": [],
+            "resource": [],
+            "anomaly": [{"code": "W3", "level": "warning",
+                         "mind": "alice", "message": "orphan kind"}],
+        }
+        captured: dict = {}
+
+        def spy_judge(report, **kwargs):
+            captured["report"] = report
+            from judgment import MindJudgment
+            return [MindJudgment("alice", "investigate", "W3 cited")]
+
+        client = MagicMock()
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.build_realm_report") as mock_report, \
+             patch("conductor.judge_snapshot") as mock_judge:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            mock_report.return_value = realm_report
+            mock_judge.side_effect = spy_judge
+
+            result = run_one_cycle(
+                99, client=client,
+                issues_dir=self.issues_dir, snapshots_dir=self.snapshots_dir,
+            )
+
+        # build_realm_report が呼ばれた
+        mock_report.assert_called_once()
+        # judge_snapshot に渡された dict が v1.0 report (= anomaly 含む)
+        self.assertEqual(captured["report"].get("schema_version"), "1.0")
+        self.assertEqual(len(captured["report"].get("anomaly", [])), 1)
+        # 判定結果は正常に処理される
+        self.assertEqual(result.judgment_status, "ok")
+        self.assertEqual(result.judgments_action_breakdown, {"investigate": 1})
+
+    def test_cycle_falls_back_to_snapshot_when_report_empty(self) -> None:
+        """Phase 5e 防御: build_realm_report が空 minds を返すなら snapshot を
+        使う (= 観測漏れで judgment が 0 件入力 skipped になるのを防ぐ)。
+        """
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        empty_report = {
+            "schema_version": "1.0",
+            "minds": [],  # 観測漏れを模倣
+            "flow": [], "resource": [], "anomaly": [],
+        }
+        captured: dict = {}
+
+        def spy_judge(report, **kwargs):
+            captured["report"] = report
+            from judgment import MindJudgment
+            return [MindJudgment("alice", "ok", "healthy")]
+
+        client = MagicMock()
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.build_realm_report") as mock_report, \
+             patch("conductor.judge_snapshot") as mock_judge:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            mock_report.return_value = empty_report
+            mock_judge.side_effect = spy_judge
+
+            result = run_one_cycle(
+                100, client=client,
+                issues_dir=self.issues_dir, snapshots_dir=self.snapshots_dir,
+            )
+
+        # snapshot にフォールバック (schema_version 無し、v0.1 形式)
+        self.assertNotIn("schema_version", captured["report"])
+        self.assertEqual(len(captured["report"]["minds"]), 1)
+        # judgement_status は ok (skipped にならない)
+        self.assertEqual(result.judgment_status, "ok")
+
     def test_cycle_handles_inbox_failure(self) -> None:
         """inbox poll が例外でも cycle は完走する。"""
         with patch("conductor.list_pending_issues") as mock_inbox, \

@@ -99,6 +99,48 @@ class TestPrompts(unittest.TestCase):
         self.assertIn("bob", prompt)
         self.assertIn("2 total", prompt)
 
+    def test_user_prompt_marks_v01_schema_only_minds_section(self) -> None:
+        """Phase 5e: v0.1 snapshot 入力では header に 'sections: minds' のみ。"""
+        prompt = _build_user_prompt(SAMPLE_SNAPSHOT)
+        self.assertIn("schema=0.1", prompt)
+        self.assertIn("sections: minds", prompt)
+        # flow / resource / anomaly は v0.1 では sections に出ない
+        self.assertNotIn("sections: minds, flow", prompt)
+
+    def test_user_prompt_advertises_all_v10_sections(self) -> None:
+        """Phase 5e: --for-warden の v1.0 統合 report は全 section を header で
+        告知する (= Claude が「これを見るぞ」と即座に判別できる)。"""
+        report = {
+            "schema_version": "1.0",
+            "generated_at": "2026-05-29T00:00:00Z",
+            "minds": [
+                {"mind_name": "alice", "kind": "generic", "persona": "designer",
+                 "status": "active", "category": "running",
+                 "unread_inbox_count": 0, "archive_count": 0,
+                 "spawned_at_epoch": 0.0, "last_activity_epoch": 0.0},
+            ],
+            "flow": [{"from_mind": "alice", "to_mind": "bob", "count": 1,
+                      "first_at": "2026-05-29T00:00:00Z",
+                      "last_at": "2026-05-29T00:00:00Z"}],
+            "resource": [{"name": "alice", "category": "mindspace",
+                          "file_count": 3, "byte_count": 1024}],
+            "anomaly": [{"code": "W3", "level": "warning",
+                         "mind": "alice", "message": "orphan kind"}],
+        }
+        prompt = _build_user_prompt(report)
+        self.assertIn("schema=1.0", prompt)
+        self.assertIn("sections: minds, flow, resource, anomaly", prompt)
+        # 内容も含まれる
+        self.assertIn("W3", prompt)
+        self.assertIn("orphan kind", prompt)
+
+    def test_system_prompt_mentions_v10_signals(self) -> None:
+        """Phase 5e: system prompt が flow/resource/anomaly を判断材料として
+        言及している (= Claude が判断材料を活用できる)。"""
+        prompt = _build_system_prompt()
+        for keyword in ("flow", "resource", "anomaly", "W2", "W3", "I1", "I2"):
+            self.assertIn(keyword, prompt)
+
 
 class TestParseResponse(unittest.TestCase):
     def test_parses_valid_array(self) -> None:
