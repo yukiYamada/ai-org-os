@@ -362,6 +362,12 @@ def write_status(
             "judgments_action_breakdown": result.judgments_action_breakdown,
             "judgment_status": result.judgment_status,
             "judgment_error": result.judgment_error,
+            # Phase 5e Step B hotfix: actuator が実際に Conduit へ送った
+            # dispatch 数。observe.py --realm が「Warden が今 cycle で何件
+            # Mind に働きかけたか」を表示するために status JSON 経由で
+            # 公開する必要がある (Step B 本体で CycleResult には追加した
+            # が payload に反映していなかった漏れ)。
+            "dispatches_sent": result.dispatches_sent,
         },
         "total_cycles": total_cycles if total_cycles is not None else result.cycle,
         "updated_at": _iso(_utcnow()),
@@ -424,12 +430,14 @@ def run_loop(
         except OSError as exc:
             print(f"[conductor][cycle {cycle}] write_status failed: {exc}", file=sys.stderr)
 
-        # 進捗を 1 行で出す (docker logs で見やすく)
+        # 進捗を 1 行で出す (docker logs で見やすく)。dispatches は Step B
+        # 以降の actuator の活動量 (0 = 今 cycle で warden 発信なし)。
         print(
             f"[conductor][cycle {cycle}] pending={result.pending_issues} "
             f"snapshot={'ok' if result.snapshot_path else 'fail'} "
             f"judgment={result.judgment_status} "
-            f"actions={result.judgments_action_breakdown}",
+            f"actions={result.judgments_action_breakdown} "
+            f"dispatches={result.dispatches_sent}",
             flush=True,
         )
 

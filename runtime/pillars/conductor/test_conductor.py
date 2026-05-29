@@ -428,7 +428,7 @@ class TestWriteStatus(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _sample_result(self) -> CycleResult:
+    def _sample_result(self, dispatches_sent: int = 0) -> CycleResult:
         return CycleResult(
             cycle=3,
             started_at="2026-05-24T01:00:00Z",
@@ -439,6 +439,7 @@ class TestWriteStatus(unittest.TestCase):
             judgments_action_breakdown={"ok": 3, "monitor": 2},
             judgment_status="ok",
             judgment_error=None,
+            dispatches_sent=dispatches_sent,
         )
 
     def test_writes_json_with_schema(self) -> None:
@@ -447,6 +448,22 @@ class TestWriteStatus(unittest.TestCase):
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(payload["schema"], "conductor-status/v1")
         self.assertEqual(payload["total_cycles"], 10)
+
+    def test_status_payload_includes_dispatches_sent(self) -> None:
+        """Phase 5e Step B hotfix: actuator 活動量を status JSON で公開する。
+        observe.py --realm が「Warden が dispatch を何件送ったか」を表示
+        するために必要 (Step B 本体で CycleResult には足したが payload
+        に反映漏れだった)。"""
+        write_status(self._sample_result(dispatches_sent=2), target=self.path)
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertIn("dispatches_sent", payload["last_cycle"])
+        self.assertEqual(payload["last_cycle"]["dispatches_sent"], 2)
+
+    def test_status_payload_zero_dispatches_default(self) -> None:
+        """dispatch を出さない cycle (fallback / 全 ok 等) では 0 が出る。"""
+        write_status(self._sample_result(), target=self.path)
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["last_cycle"]["dispatches_sent"], 0)
         self.assertEqual(payload["last_cycle"]["cycle"], 3)
 
     def test_atomic_write_no_tmp_residue(self) -> None:
