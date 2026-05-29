@@ -54,6 +54,9 @@ sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "judgment"))
 # 他 Pillar の API を import。失敗したら起動できないのでこれは fatal。
 from snapshot import load_snapshot, write_snapshot  # noqa: E402
 from inbox import list_pending_issues  # noqa: E402
+# Phase 5e: Observation v1.0 統合 report を Judgment 入力に拡張するため
+# build_realm_report を module-top で import (= test の patch 対象に統一)
+from mind_scope import build_realm_report  # noqa: E402
 from judgment import (  # noqa: E402
     AnthropicNotConfigured,
     JudgmentParseError,
@@ -163,7 +166,12 @@ def run_one_cycle(
         traceback.print_exc(file=sys.stderr)
         pending_count = -1  # marker: 取得失敗 (observe.py --realm では "?" 表示にする)
 
-    # ---- step 2-3: Observation snapshot
+    # ---- step 2-3: Observation snapshot + 拡張 report (Phase 5e)
+    # 旧: snapshot のみを Judgment に渡していた (Phase 5a-3 / v0.1)
+    # 新: build_realm_report() で anomaly / flow / resource も含めた v1.0 統合
+    # report を Judgment に渡し、判断材料を拡張する。失敗時は snapshot だけの
+    # fallback (= 旧挙動と同等) で安全側に倒れる (= Pillar 異常を Realm 停止に
+    # 繋げない、ADR-0013 §1 F3)。
     snapshot_path: Path | None = None
     snapshot_payload: dict = {"minds": []}
     try:
@@ -173,12 +181,33 @@ def run_one_cycle(
         print(f"[conductor][cycle {cycle_number}] snapshot failed: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
+    # Judgment への入力は基本 snapshot だが、build_realm_report が動けば
+    # それを上書き使用 (= 統合 report)。失敗しても snapshot 単独で fallback。
+    # build_realm_report は module-top で import 済 (test の patch 対象に統一)。
+    judgment_input: dict = snapshot_payload
+    try:
+        report = build_realm_report()
+        # 防御: report の minds が snapshot より少なければ snapshot を採用
+        # (= Observation v1.0 が一時的に観測漏れを起こしても、Judgment が
+        # 0 件入力で skip にならないようにする防御)
+        if report.get("minds"):
+            judgment_input = report
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[conductor][cycle {cycle_number}] realm_report failed "
+            f"(falling back to snapshot only): {exc}",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+
     # ---- step 4: Judgment
     judgments: list[MindJudgment] = []
     judgment_status = "ok"
     judgment_error: str | None = None
 
-    if not snapshot_payload.get("minds"):
+    # judgment_input は build_realm_report が成功すれば v1.0 統合 report、
+    # 失敗時は v0.1 snapshot (= 旧挙動)。minds が無ければ skipped。
+    if not judgment_input.get("minds"):
         judgment_status = "skipped"
     else:
         # client が無ければ make_client を試す。AnthropicNotConfigured は fallback。
@@ -187,22 +216,23 @@ def run_one_cycle(
             try:
                 local_client = make_client()
             except AnthropicNotConfigured as exc:
-                judgments, _ = _fallback_judgments(snapshot_payload, "no-api-key")
+                judgments, _ = _fallback_judgments(judgment_input, "no-api-key")
                 judgment_status = "fallback-no-key"
                 judgment_error = str(exc)
 
         if judgment_status == "ok":
             try:
-                judgments = judge_snapshot(snapshot_payload, client=local_client)
+                # judgment は snapshot/report 両方を上位互換で受理する (Phase 5e)
+                judgments = judge_snapshot(judgment_input, client=local_client)
             except (JudgmentParseError, AnthropicNotConfigured) as exc:
                 judgments, _ = _fallback_judgments(
-                    snapshot_payload, f"judgment-error: {type(exc).__name__}"
+                    judgment_input, f"judgment-error: {type(exc).__name__}"
                 )
                 judgment_status = "fallback-error"
                 judgment_error = str(exc)
             except Exception as exc:  # noqa: BLE001 — SDK 内部 / network error
                 judgments, _ = _fallback_judgments(
-                    snapshot_payload, f"unexpected: {type(exc).__name__}"
+                    judgment_input, f"unexpected: {type(exc).__name__}"
                 )
                 judgment_status = "fallback-error"
                 judgment_error = str(exc)

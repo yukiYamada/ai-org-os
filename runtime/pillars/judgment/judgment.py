@@ -76,37 +76,80 @@ def _build_system_prompt() -> str:
     """Judgment Claude の役割と語彙を確定させる system prompt。
 
     語彙が VALID_ACTIONS と一致しないと parse error になるので、ここに固定する。
+
+    Phase 5e (#108 系 / Observation v1.0 統合): 入力に anomaly / flow / resource
+    が含まれる場合、それらも判断材料に使うよう明示する。`schema_version: "1.0"`
+    が `--for-warden` 互換、v0.1 snapshot は基本フィールドだけが含まれる。
     """
     return """\
-You are the Judgment Pillar of ai-org-os Warden. You receive an observation snapshot
+You are the Judgment Pillar of ai-org-os Warden. You receive an observation report
 of Minds (autonomous LLM agents) running inside a Realm and decide one action per Mind.
+
+The report MAY include any of these sections (use what is present, ignore what is not):
+  - "minds":     status snapshot per Mind (always present; primary signal)
+  - "flow":      dispatch flow edges (from_mind -> to_mind, count, first_at, last_at)
+                 use to spot communication patterns: silent Minds, broken pairs, loops
+  - "resource":  per-Mind mindspace size + conduit-storage usage
+                 use to spot bloat, runaway growth
+  - "anomaly":   warning/info signals (W1-W3 / I1-I2)
+                 if W2/W3 are present, treat as immediate concern (likely investigate)
+                 if I1/I2 are present, treat as soft signal (monitor or investigate)
 
 You MUST respond with a single JSON array, no prose, no markdown fences. Each element
 must be an object with exactly these keys:
-  - "mind_name": string, must match the input
+  - "mind_name": string, must match a mind from input "minds"
   - "action": one of "ok", "monitor", "investigate", "notify-human"
-  - "reason": short string, why you chose that action (max 200 chars)
+  - "reason": short string, why you chose that action (max 200 chars).
+              Cite the signal you relied on (e.g., "W3 orphan kind", "no recent inbound")
 
 Action vocabulary (ordered by escalation):
   - "ok": Mind looks healthy, no attention needed
-  - "monitor": Looks fine but watch next cycle (mild stale, low unread count)
-  - "investigate": Something is off — needs deeper observation (e.g., long stale + unread,
-                   abnormal Dispatch pattern). A human or Warden should look.
+  - "monitor": Looks fine but watch next cycle (mild stale, low unread, I1/I2 signals)
+  - "investigate": Something is off — needs deeper observation
+                   (e.g., W2/W3 anomalies, long stale + unread, no inbound dispatch,
+                    abnormal resource growth). A human or Warden should look.
   - "notify-human": Critical — failsafe path (ADR-0012 responsibility 5). Use sparingly.
 
-Be decisive. Do not output explanations outside the JSON. If input is empty, return [].
+Be decisive. Do not output explanations outside the JSON. If "minds" is empty, return [].
 """
 
 
 def _build_user_prompt(snapshot: dict) -> str:
-    """snapshot dict を Claude が読みやすい形に整形する。
+    """observation report dict を Claude が読みやすい形に整形する。
 
-    snapshot は Observation Pillar v0.1 の write_snapshot 出力フォーマット
-    (`{generated_at, snapshot_id, minds: [...]}`)。
+    Phase 5a-3 では v0.1 snapshot (`{generated_at, snapshot_id, minds: [...]}`)。
+    Phase 5e (Observation v1.0 統合) からは `--for-warden` の統合 JSON も受理:
+    `{schema_version: "1.0", generated_at, minds, flow, resource, anomaly}`。
+
+    判断 Claude には:
+    - report 全体を JSON dump (= 全 signal を context として渡す)
+    - "minds" の件数を末尾で伝える (= 期待出力件数を明示)
+
+    余分な field (flow / resource / anomaly) は v0.1 snapshot だと欠落、
+    Judgment Claude は system prompt の指示に従い「無いものは無視」する。
     """
     minds = snapshot.get("minds", [])
+    schema = snapshot.get("schema_version", "0.1")
+    has_flow = bool(snapshot.get("flow"))
+    has_resource = bool(snapshot.get("resource"))
+    has_anomaly = bool(snapshot.get("anomaly"))
+
+    # ヘッダ: schema_version と含まれる section を明示 (Claude が「これは何」
+    # を即座に判別できるよう)。
+    sections_present = ["minds"]
+    if has_flow:
+        sections_present.append("flow")
+    if has_resource:
+        sections_present.append("resource")
+    if has_anomaly:
+        sections_present.append("anomaly")
+    header = (
+        f"Observation report (schema={schema}, "
+        f"sections: {', '.join(sections_present)}):"
+    )
+
     return (
-        "Snapshot to judge:\n\n"
+        f"{header}\n\n"
         f"{json.dumps(snapshot, indent=2, ensure_ascii=False)}\n\n"
         f"Return one judgment per Mind ({len(minds)} total)."
     )
@@ -234,10 +277,18 @@ def judge_snapshot(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
 ) -> list[MindJudgment]:
-    """Observation snapshot を Claude に渡して各 Mind の action を判定する。
+    """Observation report を Claude に渡して各 Mind の action を判定する。
+
+    Phase 5e (Observation v1.0 統合): 引数 `snapshot` は v0.1 snapshot だけで
+    なく、`mind_scope.build_realm_report()` 出力 (schema_version="1.0") も
+    受理する (= "snapshot は report の subset" として上位互換)。Claude には
+    flow / resource / anomaly セクションがあれば全部渡される。判断材料が
+    増えても VALID_ACTIONS の語彙は変えない (= passive な観察 action のみ、
+    active な spawn/kill 等は別 Phase で議論)。
 
     引数:
-        snapshot: Observation Pillar v0.1 形式の dict
+        snapshot: Observation report の dict。最低限 `minds: [...]` を持つ。
+                  optionally `flow / resource / anomaly` を含む。
         client: Anthropic Client。None なら make_client() で初期化
         model / max_tokens / temperature: SDK 呼び出しパラメータ
 
@@ -245,7 +296,7 @@ def judge_snapshot(
         各 Mind の MindJudgment のリスト。snapshot.minds の順序とは限らない
         ことに注意（mind_name で照合すること）。
 
-    Mind が 0 件の snapshot は空リストを返す（SDK 呼び出しせず短絡）。
+    Mind が 0 件の input は空リストを返す（SDK 呼び出しせず短絡）。
 
     例外:
         AnthropicNotConfigured: API key / SDK 不足
