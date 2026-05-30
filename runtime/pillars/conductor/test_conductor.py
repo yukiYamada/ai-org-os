@@ -523,6 +523,203 @@ class TestActuateDispatches(unittest.TestCase):
         self.assertEqual(result.dispatches_sent, 1)
 
 
+class TestWardenInboxFeedback(unittest.TestCase):
+    """Phase 5e Step D / ADR-0025: Mind から warden への返信を Conductor が
+    Judgment 入力に含め、Judgment 成功後に ack する経路の検証。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.snapshots_dir = Path(self.tmp.name) / "snapshots"
+        self.snapshots_dir.mkdir()
+        self.issues_dir = Path(self.tmp.name) / "issues"
+        self.issues_dir.mkdir()
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = self.tmp.name
+        (Path(self.tmp.name) / "registry" / "minds").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    def test_parse_dispatch_frontmatter_typical_message(self) -> None:
+        from conductor import _parse_dispatch_frontmatter
+        content = (
+            "---\n"
+            "from: alice\n"
+            "to: warden\n"
+            "topic: re: status check\n"
+            "dispatched_at: 2026-05-30T01:58:03Z\n"
+            "msg_id: abc-123\n"
+            "---\n"
+            "\n"
+            "Reply body here, multi line\n"
+            "with content.\n"
+        )
+        parsed = _parse_dispatch_frontmatter(content)
+        self.assertEqual(parsed["from"], "alice")
+        self.assertEqual(parsed["to"], "warden")
+        self.assertEqual(parsed["topic"], "re: status check")
+        self.assertIn("Reply body here", parsed["body"])
+        self.assertIn("with content.", parsed["body"])
+
+    def test_parse_dispatch_frontmatter_malformed_returns_raw(self) -> None:
+        from conductor import _parse_dispatch_frontmatter
+        # frontmatter なし
+        parsed = _parse_dispatch_frontmatter("just a body, no frontmatter\n")
+        self.assertIn("raw", parsed)
+        self.assertNotIn("from", parsed)
+
+    def test_warden_replies_passed_to_judgment_when_ok(self) -> None:
+        """warden inbox が non-empty なら judgment_input に warden_inbox 追加、
+        judgment 成功時に全件 ack される。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"ok","reason":"r"}]'
+        )
+
+        fake_replies = [
+            {"msg_id": "id-1", "from": "alice", "topic": "t",
+             "body": "b1", "to": "warden"},
+            {"msg_id": "id-2", "from": "bob", "topic": "t",
+             "body": "b2", "to": "warden"},
+        ]
+
+        captured_input: dict = {}
+
+        def spy_judge(report, client=None):  # noqa: ARG001
+            captured_input.update(report)
+            from judgment import MindJudgment
+            return [MindJudgment("alice", "ok", "r")]
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.judge_snapshot", side_effect=spy_judge), \
+             patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch("conductor._ack_warden_inbox", return_value=2) as mock_ack:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1, client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        # Judgment 入力に warden_inbox が含まれていたこと
+        self.assertIn("warden_inbox", captured_input)
+        self.assertEqual(len(captured_input["warden_inbox"]), 2)
+        # 成功時に ack 全件
+        mock_ack.assert_called_once()
+        acked_ids = mock_ack.call_args.args[0]
+        self.assertEqual(set(acked_ids), {"id-1", "id-2"})
+        self.assertEqual(result.warden_replies_read, 2)
+        self.assertEqual(result.warden_replies_acked, 2)
+
+    def test_warden_replies_not_acked_on_fallback(self) -> None:
+        """Judgment 失敗時は ack しない (at-least-once 配送: 次 cycle で再読込)。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        fake_replies = [
+            {"msg_id": "id-1", "from": "alice", "topic": "t", "body": "b"},
+        ]
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.judge_snapshot",
+                   side_effect=RuntimeError("api down")), \
+             patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch("conductor._ack_warden_inbox") as mock_ack:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1, client=MagicMock(),
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        # fallback-error 経路: 読みはしたが ack はしない
+        self.assertEqual(result.judgment_status, "fallback-error")
+        self.assertEqual(result.warden_replies_read, 1)
+        self.assertEqual(result.warden_replies_acked, 0)
+        mock_ack.assert_not_called()
+
+    def test_empty_warden_inbox_no_section_in_input(self) -> None:
+        """warden inbox 空なら judgment_input に warden_inbox key を追加しない
+        (= 既存挙動完全互換)。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        captured_input: dict = {}
+
+        def spy_judge(report, client=None):  # noqa: ARG001
+            captured_input.update(report)
+            from judgment import MindJudgment
+            return [MindJudgment("alice", "ok", "r")]
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.judge_snapshot", side_effect=spy_judge), \
+             patch("conductor._read_warden_inbox", return_value=[]):
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1, client=MagicMock(),
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        self.assertNotIn("warden_inbox", captured_input)
+        self.assertEqual(result.warden_replies_read, 0)
+        self.assertEqual(result.warden_replies_acked, 0)
+
+    def test_max_replies_per_cycle_truncates(self) -> None:
+        """MAX_WARDEN_REPLIES_PER_CYCLE を超える reply は truncate される。
+        実際の truncation は _read_warden_inbox 内で行われる。"""
+        from conductor import MAX_WARDEN_REPLIES_PER_CYCLE
+        # ロックテスト: 上限定数の値を固定 (config drift 防止)
+        self.assertEqual(MAX_WARDEN_REPLIES_PER_CYCLE, 20)
+
+    def test_read_warden_inbox_truncates_actually(self) -> None:
+        """Self-review fix: 単なる定数 assert ではなく、25 件 mock を流して
+        実際に 20 件しか parse されないことを確認する。
+        slice 式 messages[:MAX_WARDEN_REPLIES_PER_CYCLE] のリファクタ事故を
+        catch する。"""
+        from conductor import _read_warden_inbox
+
+        # 25 件の fake message を返す Nexus mock
+        fake_messages = [
+            {
+                "msg_id": f"id-{i:02d}",
+                "content": (
+                    "---\n"
+                    f"from: alice\nto: warden\ntopic: t{i}\n"
+                    f"dispatched_at: 2026-05-30T00:00:00Z\nmsg_id: id-{i:02d}\n"
+                    "---\n\nbody\n"
+                ),
+            }
+            for i in range(25)
+        ]
+
+        nexus_mock = MagicMock()
+        nexus_mock.read_inbox.return_value = {"messages": fake_messages}
+
+        # storage.Nexus の遅延 import をスタブで差し替え
+        with patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = _read_warden_inbox()
+
+        # 20 件で truncate されている (25 件全部入っていない)
+        self.assertEqual(len(result), 20)
+        # 先頭 20 件 = id-00..id-19 が来ている (slice の先頭優先)
+        self.assertEqual(result[0]["msg_id"], "id-00")
+        self.assertEqual(result[-1]["msg_id"], "id-19")
+
+
 class TestWriteStatus(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -567,7 +764,29 @@ class TestWriteStatus(unittest.TestCase):
         write_status(self._sample_result(), target=self.path)
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(payload["last_cycle"]["dispatches_sent"], 0)
-        self.assertEqual(payload["last_cycle"]["cycle"], 3)
+
+    def test_status_payload_includes_warden_replies(self) -> None:
+        """Phase 5e Step D / ADR-0025: warden_replies_read / acked が
+        status JSON で公開される (observe.py から見える)。"""
+        r = CycleResult(
+            cycle=4,
+            started_at="2026-05-30T01:00:00Z",
+            ended_at="2026-05-30T01:00:01Z",
+            pending_issues=0,
+            snapshot_path="/tmp/snap.json",
+            judgments_count=1,
+            judgments_action_breakdown={"ok": 1},
+            judgment_status="ok",
+            judgment_error=None,
+            dispatches_sent=0,
+            warden_replies_read=3,
+            warden_replies_acked=3,
+        )
+        write_status(r, target=self.path)
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["last_cycle"]["warden_replies_read"], 3)
+        self.assertEqual(payload["last_cycle"]["warden_replies_acked"], 3)
+        self.assertEqual(payload["last_cycle"]["cycle"], 4)
 
     def test_atomic_write_no_tmp_residue(self) -> None:
         write_status(self._sample_result(), target=self.path)
