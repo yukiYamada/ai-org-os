@@ -12,6 +12,7 @@ test_conductor.py — Conductor Pillar のユニットテスト。
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -82,8 +83,20 @@ class TestRunOneCycle(unittest.TestCase):
         self.workspace = Path(self.tmp.name)
         self.issues_dir = self.workspace / "issues"
         self.snapshots_dir = self.workspace / "snapshots"
+        # Issue #116: Phase 5e Step A 以降、run_one_cycle は build_realm_report
+        # を module-top で呼ぶ。build_realm_report は _runtime_home() →
+        # $AI_ORG_OS_HOME (デフォルト ~/.ai-org-os) を見るため、テストが
+        # 走るホストに実 Mind が居ると report が現実の minds を巻き込み
+        # judgment が fallback-error に倒れる。setUp で AI_ORG_OS_HOME を
+        # tempdir に向けて isolation を取り直す。
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.workspace)
 
     def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
         self.tmp.cleanup()
 
     def test_cycle_with_no_minds_skips_judgment(self) -> None:
@@ -315,8 +328,16 @@ class TestActuateDispatches(unittest.TestCase):
         self.snapshots_dir.mkdir()
         self.issues_dir = Path(self.tmp.name) / "issues"
         self.issues_dir.mkdir()
+        # Issue #116: build_realm_report が実 $AI_ORG_OS_HOME を読みに行く
+        # 漏れを塞ぐ (TestRunOneCycle と同じ理由)。
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = self.tmp.name
 
     def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
         self.tmp.cleanup()
 
     def test_dispatch_prompt_invokes_conduit_send_dispatch(self) -> None:
