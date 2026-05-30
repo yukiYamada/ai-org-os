@@ -102,6 +102,11 @@ class CycleResult:
     # 必ずしも一致しない (送信失敗時は count されない、= 「成功した actuator
     # 回数」)。
     dispatches_sent: int = 0
+    # Phase 5e Step D / ADR-0025: warden 宛 reply の取り込み件数。
+    # *_read = 今 cycle で Judgment 入力に渡した件数 (= Conductor が見た声)
+    # *_acked = Judgment 成功後に archive へ移した件数 (= fallback では 0)
+    warden_replies_read: int = 0
+    warden_replies_acked: int = 0
 
 
 def _utcnow() -> dt.datetime:
@@ -169,6 +174,105 @@ def _send_dispatch_via_conduit(
         topic=topic,
         body=body,
     )
+
+
+# Phase 5e Step D / ADR-0025: warden inbox feedback loop.
+# 1 cycle に取り込む warden 宛 reply の上限。massive burst で Judgment 入力が
+# token 上限を超えないようにする防御。超過分は ack しないので次 cycle で
+# 読まれる (= 自然な back-pressure)。C 設定化は別 issue (本 ADR follow-up)。
+MAX_WARDEN_REPLIES_PER_CYCLE = 20
+
+
+def _parse_dispatch_frontmatter(content: str) -> dict[str, str]:
+    """conduit dispatch file の frontmatter + body を dict に parse する。
+
+    storage.send_dispatch が書く schema:
+      ---
+      from: ...
+      to: ...
+      topic: ...
+      dispatched_at: ...
+      msg_id: ...
+      ---
+
+      <body>
+
+    frontmatter 解析失敗時は {"raw": <content>} のみ返す (Judgment 側で
+    raw を見せる形)。topic 改行は storage 側で reject 済み (PR #115)。
+    """
+    if not content.startswith("---\n"):
+        return {"raw": content.strip()}
+    end = content.find("\n---\n", 4)
+    if end < 0:
+        return {"raw": content.strip()}
+    fm_text = content[4:end]
+    body = content[end + 5 :].strip()
+    result: dict[str, str] = {}
+    for line in fm_text.splitlines():
+        if ":" in line:
+            key, _, value = line.partition(":")
+            result[key.strip()] = value.strip()
+    result["body"] = body
+    return result
+
+
+def _read_warden_inbox() -> list[dict[str, str]]:
+    """warden 宛の Mind 返信を Nexus から読む。
+
+    Phase 5e Step D / ADR-0025: Mind の声を Judgment に取り込む経路。
+    遅延 import で Conduit Pillar (storage.Nexus) をロード、identity=None
+    で起動 (Warden 経路 = Mind ではないので authorize binding なし)。
+    返り値は frontmatter parse 済み dict のリスト、最大件数で truncate。
+    失敗時は空リスト (cycle は止めない、ADR-0013 §1 F3)。
+    """
+    try:
+        sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "conduit"))
+        from storage import Nexus  # noqa: E402
+
+        nexus = Nexus()
+        result = nexus.read_inbox(WARDEN_SENDER_NAME)
+        messages = result.get("messages", [])
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[conductor] read_warden_inbox failed: {exc}", file=sys.stderr
+        )
+        traceback.print_exc(file=sys.stderr)
+        return []
+
+    parsed: list[dict[str, str]] = []
+    for m in messages[:MAX_WARDEN_REPLIES_PER_CYCLE]:
+        fm = _parse_dispatch_frontmatter(m.get("content", ""))
+        fm["msg_id"] = m.get("msg_id", fm.get("msg_id", ""))
+        parsed.append(fm)
+    return parsed
+
+
+def _ack_warden_inbox(msg_ids: list[str]) -> int:
+    """warden inbox の特定メッセージ群を ack (archive に移動)。
+
+    Phase 5e Step D / ADR-0025: Judgment 呼び出し成功 (status="ok") 後に
+    のみ呼ぶ。fallback ルートでは ack しない = 次 cycle で再読み込みされて
+    Judgment に再度渡される (at-least-once 配送)。
+
+    返り値: 成功 ack 件数。1 件失敗が他を巻き込まないよう個別 try/except。
+    """
+    if not msg_ids:
+        return 0
+    sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "conduit"))
+    from storage import Nexus  # noqa: E402
+
+    nexus = Nexus()
+    acked = 0
+    for msg_id in msg_ids:
+        try:
+            nexus.ack_dispatch(WARDEN_SENDER_NAME, msg_id)
+            acked += 1
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[conductor] ack warden_inbox msg {msg_id} failed: {exc}",
+                file=sys.stderr,
+            )
+    return acked
 
 
 def _is_mind_registered(mind_name: str) -> bool:
@@ -312,6 +416,15 @@ def run_one_cycle(
         )
         traceback.print_exc(file=sys.stderr)
 
+    # ---- step 3.5: Phase 5e Step D / ADR-0025: warden inbox feedback
+    # Mind から warden への返信を読み、Judgment 入力の "warden_inbox" に
+    # 追加する。Judgment 呼び出し成功時のみ後段で ack する (at-least-once)。
+    warden_replies = _read_warden_inbox()
+    if warden_replies:
+        # judgment_input を変更前に shallow copy (build_realm_report の戻り値を
+        # 直接 mutate しないよう防御)
+        judgment_input = {**judgment_input, "warden_inbox": warden_replies}
+
     # ---- step 4: Judgment
     judgments: list[MindJudgment] = []
     judgment_status = "ok"
@@ -357,6 +470,15 @@ def run_one_cycle(
     # ので、actuator は judgment_status="ok" のときだけ実質動く。
     dispatches_sent = _actuate_dispatches(judgments, cycle_number)
 
+    # ---- step 6: warden_inbox ack (Phase 5e Step D / ADR-0025)
+    # Judgment 呼び出しが成功 (status="ok") した場合のみ、読んだ reply を
+    # archive に移す (at-least-once 配送: fallback 系では ack しないので次
+    # cycle で再読み込みされる)。
+    warden_replies_acked = 0
+    if judgment_status == "ok" and warden_replies:
+        msg_ids = [r["msg_id"] for r in warden_replies if r.get("msg_id")]
+        warden_replies_acked = _ack_warden_inbox(msg_ids)
+
     ended_at = _utcnow()
     result = CycleResult(
         cycle=cycle_number,
@@ -369,6 +491,8 @@ def run_one_cycle(
         judgment_status=judgment_status,
         judgment_error=judgment_error,
         dispatches_sent=dispatches_sent,
+        warden_replies_read=len(warden_replies),
+        warden_replies_acked=warden_replies_acked,
     )
     return result
 
@@ -404,6 +528,11 @@ def write_status(
             # 公開する必要がある (Step B 本体で CycleResult には追加した
             # が payload に反映していなかった漏れ)。
             "dispatches_sent": result.dispatches_sent,
+            # Phase 5e Step D / ADR-0025: Warden が今 cycle で受け取った
+            # Mind からの reply 件数 (read = Judgment 入力に含めた件数、
+            # acked = Judgment 成功後に archive 化した件数)。
+            "warden_replies_read": result.warden_replies_read,
+            "warden_replies_acked": result.warden_replies_acked,
         },
         "total_cycles": total_cycles if total_cycles is not None else result.cycle,
         "updated_at": _iso(_utcnow()),
@@ -467,13 +596,15 @@ def run_loop(
             print(f"[conductor][cycle {cycle}] write_status failed: {exc}", file=sys.stderr)
 
         # 進捗を 1 行で出す (docker logs で見やすく)。dispatches は Step B
-        # 以降の actuator の活動量 (0 = 今 cycle で warden 発信なし)。
+        # 以降の actuator の活動量、warden_replies は Step D の取り込み量。
         print(
             f"[conductor][cycle {cycle}] pending={result.pending_issues} "
             f"snapshot={'ok' if result.snapshot_path else 'fail'} "
             f"judgment={result.judgment_status} "
             f"actions={result.judgments_action_breakdown} "
-            f"dispatches={result.dispatches_sent}",
+            f"dispatches={result.dispatches_sent} "
+            f"warden_replies={result.warden_replies_read}/"
+            f"{result.warden_replies_acked}",
             flush=True,
         )
 
