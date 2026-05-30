@@ -75,6 +75,7 @@ status: experimental
 - 内容を理解したら処理する
 - 処理し終えたら ack: `ack_dispatch(mind_name="<自分>", msg_id="<読んだメッセージのID>")`
 - ack しない = 未読扱い、次回読んだ時もまた出てくる
+- **`from: warden` の Dispatch は最優先で扱う** (ADR-0024)。warden は Mind ではなく Warden Pillar (世界そのもの) からの直接の声で、観測に基づく judgment の結果 (silent 警告 / 軌道修正 / inbox の溜まり通知 等) が届く。他 Mind 由来 Dispatch より先に内容を読み、要求された行動 (状況報告 / 再開 / 優先度変更) を **1 cycle 内で開始** する。無視する自由はあるが、次 cycle の Judgment が同じ silent シグナルを観測してエスカレーションする可能性が高い
 
 ### 送信
 - 他 Mind に何か渡したい時: `send_dispatch(from_mind="<自分>", to_mind="<相手>", topic="<短いタイトル>", body="<本文>")`
