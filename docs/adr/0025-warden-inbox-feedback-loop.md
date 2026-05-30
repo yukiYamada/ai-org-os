@@ -92,12 +92,16 @@ The report MAY include "warden_inbox":
 
 毎 cycle 全件読み + 全件 ack なので **「読んだ瞬間 inbox 空 → archive へ」** の流れになる。archive は永続 (= Realm 監査ログ)。
 
-警戒すべき failure mode: **massive reply burst** で 1 cycle に大量の reply が来た場合、Judgment 入力が token 上限を超える。これは:
-
-- B レベルの宣言 (= Judgment 入力構築側で truncate, scope 外)
-- 将来 max-replies-per-cycle 設定 (C 構成、別 issue)
+警戒すべき failure mode: **massive reply burst** で 1 cycle に大量の reply が来た場合、Judgment 入力が token 上限を超える。
 
 本 ADR では「読める分だけ読む、それ以上は次 cycle」とせず、シンプルに **全件読み + truncate** (= 上限件数 default 20、超過分は今 cycle で ack しないので次 cycle で読まれる)。
+
+ADR-0021 A/B/C 分類:
+
+- **現状 = B (宣言的 default)**: `MAX_WARDEN_REPLIES_PER_CYCLE = 20` は Conductor の literal 定数で、code 側で truncate を機械強制 (= rep 数で reject ではなく上位 N 件採用)。利用者が値を変えるには code 編集が要る。
+- **将来 = C (利用者構成)**: `$AI_ORG_OS_HOME/config.env` 等で利用者調整可にする (= 別 issue。ロード負荷 / token cost と相談しながら運用調整できるようにする)。
+
+PR 段階で「B 寄り宣言、将来 C 化」と明示しておく。
 
 ### 5. Mind→Mind dispatch との非対称性
 

@@ -677,10 +677,47 @@ class TestWardenInboxFeedback(unittest.TestCase):
 
     def test_max_replies_per_cycle_truncates(self) -> None:
         """MAX_WARDEN_REPLIES_PER_CYCLE を超える reply は truncate される。
-        実際の truncation は _read_warden_inbox 内で行われる (Nexus mock 経由)。"""
+        実際の truncation は _read_warden_inbox 内で行われる。"""
         from conductor import MAX_WARDEN_REPLIES_PER_CYCLE
         # ロックテスト: 上限定数の値を固定 (config drift 防止)
         self.assertEqual(MAX_WARDEN_REPLIES_PER_CYCLE, 20)
+
+    def test_read_warden_inbox_truncates_actually(self) -> None:
+        """Self-review fix: 単なる定数 assert ではなく、25 件 mock を流して
+        実際に 20 件しか parse されないことを確認する。
+        slice 式 messages[:MAX_WARDEN_REPLIES_PER_CYCLE] のリファクタ事故を
+        catch する。"""
+        from conductor import _read_warden_inbox
+
+        # 25 件の fake message を返す Nexus mock
+        fake_messages = [
+            {
+                "msg_id": f"id-{i:02d}",
+                "content": (
+                    "---\n"
+                    f"from: alice\nto: warden\ntopic: t{i}\n"
+                    f"dispatched_at: 2026-05-30T00:00:00Z\nmsg_id: id-{i:02d}\n"
+                    "---\n\nbody\n"
+                ),
+            }
+            for i in range(25)
+        ]
+
+        nexus_mock = MagicMock()
+        nexus_mock.read_inbox.return_value = {"messages": fake_messages}
+
+        # storage.Nexus の遅延 import をスタブで差し替え
+        with patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = _read_warden_inbox()
+
+        # 20 件で truncate されている (25 件全部入っていない)
+        self.assertEqual(len(result), 20)
+        # 先頭 20 件 = id-00..id-19 が来ている (slice の先頭優先)
+        self.assertEqual(result[0]["msg_id"], "id-00")
+        self.assertEqual(result[-1]["msg_id"], "id-19")
 
 
 class TestWriteStatus(unittest.TestCase):
