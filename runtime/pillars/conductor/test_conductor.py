@@ -332,6 +332,18 @@ class TestActuateDispatches(unittest.TestCase):
         # 漏れを塞ぐ (TestRunOneCycle と同じ理由)。
         self._old_home = os.environ.get("AI_ORG_OS_HOME")
         os.environ["AI_ORG_OS_HOME"] = self.tmp.name
+        # Issue #113: actuator が registry check するので、判定対象 Mind を
+        # registry に登録扱いにしておく。テストごとに必要な Mind を _register
+        # で追加。
+        self.registry_minds = Path(self.tmp.name) / "registry" / "minds"
+        self.registry_minds.mkdir(parents=True)
+
+    def _register(self, mind_name: str) -> None:
+        """Test helper: registry/minds/<name>.md を作って Mind 登録扱いにする。
+        kill-mind.sh / spawn-mind.sh の registry layout に揃える。"""
+        (self.registry_minds / f"{mind_name}.md").write_text(
+            f"---\nmind_name: {mind_name}\n---\n", encoding="utf-8"
+        )
 
     def tearDown(self) -> None:
         if self._old_home is None:
@@ -341,6 +353,7 @@ class TestActuateDispatches(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_dispatch_prompt_invokes_conduit_send_dispatch(self) -> None:
+        self._register("alice")
         snapshot_payload = {"minds": [{"mind_name": "alice"}]}
         client = MagicMock()
         client.messages.create.return_value = _mock_anthropic_message(
@@ -374,6 +387,8 @@ class TestActuateDispatches(unittest.TestCase):
     def test_dispatch_failure_does_not_abort_cycle(self) -> None:
         """send_dispatch が 1 件失敗しても、他 Mind の dispatch は試みられ
         cycle は完走する (ADR-0013 §1 F3)。"""
+        self._register("alice")
+        self._register("bob")
         snapshot_payload = {
             "minds": [
                 {"mind_name": "alice"},
@@ -412,6 +427,7 @@ class TestActuateDispatches(unittest.TestCase):
 
     def test_no_dispatch_when_no_dispatch_prompt_action(self) -> None:
         """通常の ok / monitor 判定では send_dispatch は呼ばれない (= 後方互換)。"""
+        self._register("alice")
         snapshot_payload = {"minds": [{"mind_name": "alice"}]}
         client = MagicMock()
         client.messages.create.return_value = _mock_anthropic_message(
@@ -439,6 +455,72 @@ class TestActuateDispatches(unittest.TestCase):
         Mind 側 inbox 観測が一致する必要があるため)。"""
         from conductor import WARDEN_SENDER_NAME
         self.assertEqual(WARDEN_SENDER_NAME, "warden")
+
+    def test_skip_dispatch_when_mind_not_registered(self) -> None:
+        """Issue #113: judgment 時点で snapshot に居ても registry 不在なら
+        skip。kill-mind が registry → conduit-storage の順なので、registry
+        不在 = kill 進行中。dispatch を送ると空 inbox dir が再生成され
+        kill 後にゴミが残る (ADR-0023 違反)。"""
+        # alice は意図的に _register しない (= 不在)
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b"}]'
+        )
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor._send_dispatch_via_conduit") as mock_send:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        # send_dispatch は呼ばれない、dispatches_sent=0、cycle は完走
+        mock_send.assert_not_called()
+        self.assertEqual(result.dispatches_sent, 0)
+        self.assertEqual(result.judgment_status, "ok")
+
+    def test_partial_skip_when_some_minds_unregistered(self) -> None:
+        """alice (登録あり) と carol (登録なし) が両方 dispatch-prompt 対象
+        の場合、alice には送り、carol は skip する (= partial actuation)。"""
+        self._register("alice")
+        # carol は意図的に _register しない
+        snapshot_payload = {
+            "minds": [{"mind_name": "alice"}, {"mind_name": "carol"}]
+        }
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"ba"},'
+            '{"mind_name":"carol","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"bc"}]'
+        )
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor._send_dispatch_via_conduit") as mock_send:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+
+            result = run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        # alice にだけ送られる
+        self.assertEqual(mock_send.call_count, 1)
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual(kwargs["to_mind"], "alice")
+        self.assertEqual(result.dispatches_sent, 1)
 
 
 class TestWriteStatus(unittest.TestCase):

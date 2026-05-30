@@ -171,6 +171,28 @@ def _send_dispatch_via_conduit(
     )
 
 
+def _is_mind_registered(mind_name: str) -> bool:
+    """Mind が registry に存在するかを check (Issue #113 / ADR-0023 整合)。
+
+    kill-mind.sh は registry → worktree → conduit-storage → Mindspace の
+    順で削除する (ADR-0023 §3)。registry が authoritative source なので、
+    registry エントリ不在 = 「もはや Mind ではない」と判断できる。
+
+    Conductor actuator がこれを check することで、judgment 時点で snapshot
+    に居た Mind が actuator 実行時点で kill 開始 (registry rm 後) されていた
+    場合に dispatch を skip し、`Nexus.send_dispatch` の `recipient_inbox.mkdir`
+    が空 dir を再生成してゴミ dispatch を残すのを防ぐ (kill-time race の
+    typical case を塞ぐ)。
+
+    残る微小 window:
+      check 後 - send 前 で kill が走り抜ける window は残る。完全に塞ぐには
+      Conduit `send_dispatch` 側で registry 連動が要る (= 別 issue 化)。
+    """
+    home = _runtime_home()
+    entry = home / "registry" / "minds" / f"{mind_name}.md"
+    return entry.is_file()
+
+
 def _actuate_dispatches(
     judgments: list[MindJudgment], cycle_number: int
 ) -> int:
@@ -180,6 +202,10 @@ def _actuate_dispatches(
     巻き込まないように、judgment ごとに try/except する (ADR-0013 §1 F3)。
     パース時点で dispatch_topic / dispatch_body は非 None 保証されているので
     None チェック後は str として扱う。
+
+    Issue #113: registry に居ない Mind には dispatch しない。これは
+    judgment と actuator の間で kill された Mind に対するゴミ dispatch
+    残存 (`conduit-storage/inbox/<killed>/` の自動再生成) を防ぐ。
     """
     sent = 0
     for j in judgments:
@@ -190,6 +216,16 @@ def _actuate_dispatches(
             print(
                 f"[conductor][cycle {cycle_number}] skip dispatch to "
                 f"{j.mind_name}: missing topic/body",
+                file=sys.stderr,
+            )
+            continue
+        # Issue #113: registry-first invariant — judgment 時点で snapshot
+        # に居ても、actuator 実行時点で kill 進行中なら skip。
+        if not _is_mind_registered(j.mind_name):
+            print(
+                f"[conductor][cycle {cycle_number}] skip dispatch to "
+                f"{j.mind_name}: no longer in registry "
+                f"(killed between judgment and actuator)",
                 file=sys.stderr,
             )
             continue
