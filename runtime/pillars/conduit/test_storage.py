@@ -173,6 +173,24 @@ class TestIdentityBinding(unittest.TestCase):
         with self.assertRaises(ValueError):
             Nexus(storage_dir=self.tmp_dir, identity="../escape")
 
+    def test_reserved_identity_warden_rejected_at_init(self) -> None:
+        """Issue #112 / ADR-0024 §3: Mind が 'warden' として MCP server を
+        立ち上げられない (Warden 偽装防止)。"""
+        with self.assertRaises(ValueError) as ctx:
+            Nexus(storage_dir=self.tmp_dir, identity="warden")
+        self.assertIn("reserved", str(ctx.exception).lower())
+        self.assertIn("warden", str(ctx.exception))
+
+    def test_unbound_nexus_accepts_warden_sender(self) -> None:
+        """identity=None (= Conductor/Warden 経路) は warden を from_mind に
+        使えなければ Step B actuator が壊れる。予約語チェックは Mind 名
+        (identity) にのみ適用、from_mind には適用しない。"""
+        nx = Nexus(storage_dir=self.tmp_dir)  # identity=None
+        result = nx.send_dispatch(
+            from_mind="warden", to_mind="bob", topic="t", body="x"
+        )
+        self.assertTrue(result["ok"])
+
     def test_unbound_nexus_accepts_any_mind(self) -> None:
         # 既存挙動の維持（identity=None で誰の名前でも OK）。
         nx = Nexus(storage_dir=self.tmp_dir)

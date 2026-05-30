@@ -36,10 +36,38 @@ DEFAULT_STORAGE_DIR = _default_storage_dir()
 MIND_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 MSG_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
+# Phase 5e / ADR-0024 §3: Mind が名乗れない予約語。Realm sender 専用。
+# Mind が "warden" を名乗ると Warden 発信の dispatch と区別不能になり、
+# identity の意味論が壊れる (Mind sender vs Realm sender の混同)。
+# Conductor 経路 (`Nexus(identity=None).send_dispatch(from_mind="warden", ...)`)
+# は許可するため、`_validate_mind_name` には予約語チェックを入れず、
+# 別 helper `_reject_if_reserved_for_mind` で「Mind 名」として使う場面に
+# 限定して reject する。Issue #112。
+RESERVED_MIND_NAMES = frozenset({"warden"})
+
 
 def _validate_mind_name(name: Any, field: str) -> None:
     if not isinstance(name, str) or not MIND_NAME_RE.match(name):
         raise ValueError(f"invalid {field}: must match {MIND_NAME_RE.pattern}")
+
+
+def _reject_if_reserved_for_mind(name: str, field: str) -> None:
+    """Mind 名として使われる場面で予約語を reject。
+
+    呼ぶ場面:
+    - `Nexus(identity=<name>)`: MCP server が Mind プロセス毎に立ち上がる
+      identity binding。ここに "warden" を渡せると Mind が Warden の身体を
+      乗っ取れる
+    - 将来 register_mind 系 API ができたとき (現状 spawn-mind.sh が直接
+      ファイル書き出ししているのでこの helper は呼ばれない、bash 側でも
+      同じ予約語リストをハードコードして二重防御)
+    """
+    if name in RESERVED_MIND_NAMES:
+        raise ValueError(
+            f"invalid {field}: '{name}' is reserved for Realm senders "
+            f"(ADR-0024 §3). Mind names cannot use: "
+            f"{sorted(RESERVED_MIND_NAMES)}"
+        )
 
 
 def _validate_msg_id(msg_id: Any) -> None:
@@ -90,6 +118,10 @@ class Nexus:
         # When identity is provided, validate its shape so it cannot be a path traversal etc.
         if identity is not None:
             _validate_mind_name(identity, "identity")
+            # Issue #112 / ADR-0024 §3: Mind が "warden" として MCP server
+            # を立ち上げられないように予約語を reject (identity=None で
+            # 起動する Conductor/Warden 経路は影響なし)。
+            _reject_if_reserved_for_mind(identity, "identity")
         self.identity = identity
 
     def _ensure_dirs(self) -> None:
