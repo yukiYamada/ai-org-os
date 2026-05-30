@@ -111,6 +111,10 @@ MIND_NAME="${ARGS[2]}"
 # The pattern matches storage.py's _validate_mind_name so the host-side and
 # the Python-side rules stay consistent.
 _VALID_NAME_RE='^[A-Za-z0-9._-]{1,64}$'
+# Phase 5e / ADR-0024 §3 / Issue #112: Mind 名として使えない予約語。
+# Realm sender (Warden 由来 dispatch 等) と区別不能になるのを防ぐ。
+# 値は storage.py の RESERVED_MIND_NAMES と一致させること (二重防御)。
+_RESERVED_MIND_NAMES=("warden")
 validate_arg() {
   local arg_label="$1"
   local arg_value="$2"
@@ -120,11 +124,25 @@ validate_arg() {
     exit 6
   fi
 }
+# Mind 名固有の予約語チェック (kind / persona / guild / workspace には適用しない)。
+reject_reserved_mind_name() {
+  local arg_value="$1"
+  local reserved
+  for reserved in "${_RESERVED_MIND_NAMES[@]}"; do
+    if [ "${arg_value}" = "${reserved}" ]; then
+      echo "[ERROR] Mind name '${arg_value}' is reserved for Realm senders (ADR-0024 §3)." >&2
+      echo "[HINT] Reserved names: ${_RESERVED_MIND_NAMES[*]}" >&2
+      echo "[HINT] Choose another name for the Mind." >&2
+      exit 7
+    fi
+  done
+}
 validate_arg "kind" "${KIND}"
 validate_arg "persona" "${PERSONA}"
 validate_arg "mind-name" "${MIND_NAME}"
 validate_arg "guild" "${GUILD}"
 validate_arg "workspace" "${WORKSPACE}"
+reject_reserved_mind_name "${MIND_NAME}"
 
 # Phase 5a-2: 本スクリプトは runtime/pillars/lifecycle/ 配下。
 # Phase 5b-4 (#81 / ADR-0018): Mindspace は $AI_ORG_OS_HOME/minds/<name>/ で
