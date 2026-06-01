@@ -22,6 +22,11 @@
 #   - .mind-loop.pid    プロセス PID（kill-mind.sh が参照、起動中のみ存在）
 #   - mind-loop.log     各 cycle の開始時刻 / 終了時刻 / claude exit code
 #
+# Realm 全体に書き込むもの (Phase 5f Step 1 / ADR-0026 §4.5):
+#   - $AI_ORG_OS_HOME/logs/minds/<mind>/mind-loop.jsonl
+#     構造化 event log (mind_loop.start / mind_loop.end)。observe.py --trace
+#     から時系列 join 可能。書き込み失敗は loop を止めない (F3 / ADR-0013 §1)。
+#
 # ADR-0010 §3 との関係:
 #   - 「Mind に idle 状態はない」= ループが回り続ける限り Mind は active。
 #   - 停止 = ループが止まる = Mind が死ぬ（巻き戻しなし、ADR-0013 §4 と整合）。
@@ -199,6 +204,48 @@ on_signal() {
 }
 trap on_signal TERM INT
 
+# ----- Phase 5f Step 1 / ADR-0026 §4.5: 構造化 event log -----
+#
+# event は $AI_ORG_OS_HOME/logs/minds/<mind>/mind-loop.jsonl に 1 行 1 JSON で
+# append される。F3 準拠: mkdir / write 失敗は WARN 出して loop は続ける。
+# ts は UTC ISO-8601 ms precision (BSD date 等 %3N 非対応環境では .000Z fallback)。
+# Mind 名は validate 済 (^[A-Za-z0-9._-]{1,64}$) のため JSON 文字列に安全に
+# 埋め込める (escape 不要)。
+
+EVENT_LOGS_DIR="${RUNTIME_HOME}/logs/minds/${MIND_NAME}"
+EVENT_LOG_FILE="${EVENT_LOGS_DIR}/mind-loop.jsonl"
+
+_mindloop_iso_ms() {
+  local ts
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ" 2>/dev/null || true)"
+  if [ -z "${ts}" ] || [[ "${ts}" == *"%3N"* ]]; then
+    # BSD date 等で %3N が literal として残るパターン: 秒精度に degrade。
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+  fi
+  printf '%s' "${ts}"
+}
+
+# Usage: _mindloop_emit_event <event_name> [<extra_json_fields>]
+# extra は leading comma 付きの JSON フラグメント
+# (例: ',"cycle":1,"pid":12345')。空なら拡張 field なし。
+_mindloop_emit_event() {
+  local event="$1"
+  local extra="${2:-}"
+  if ! mkdir -p "${EVENT_LOGS_DIR}" 2>/dev/null; then
+    echo "[mind-loop] WARN: failed to mkdir ${EVENT_LOGS_DIR}" >&2
+    return 0
+  fi
+  local ts
+  ts="$(_mindloop_iso_ms)"
+  if ! printf '{"ts":"%s","event":"%s","actor":"%s"%s}\n' \
+        "${ts}" "${event}" "${MIND_NAME}" "${extra}" \
+        >> "${EVENT_LOG_FILE}" 2>/dev/null; then
+    echo "[mind-loop] WARN: failed to write ${EVENT_LOG_FILE}" >&2
+    return 0
+  fi
+  return 0
+}
+
 # ----- claude バイナリ解決 -----
 
 CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
@@ -219,7 +266,10 @@ echo "[mind-loop] pid=$$ pidfile=${PID_FILE}" | tee -a "${LOG_FILE}"
 while :; do
   CYCLE=$((CYCLE + 1))
   STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  START_EPOCH="$(date -u +%s)"
   echo "[mind-loop][cycle ${CYCLE}] start ${STARTED_AT}" >> "${LOG_FILE}"
+  # ADR-0026 §4.5: mind_loop.start event。pid は $$ (loop プロセス自身)。
+  _mindloop_emit_event "mind_loop.start" ",\"cycle\":${CYCLE},\"pid\":$$"
 
   # cycle に渡す prompt は最小: cycle 番号と Mind 名のみ。
   # 本実装の主目的は「ループが回ること」「停止できること」「ログが残ること」の検証。
@@ -238,7 +288,12 @@ while :; do
   set -e
 
   FINISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  END_EPOCH="$(date -u +%s)"
+  DURATION_S=$((END_EPOCH - START_EPOCH))
   echo "[mind-loop][cycle ${CYCLE}] end ${FINISHED_AT} exit=${RC}" >> "${LOG_FILE}"
+  # ADR-0026 §4.5: mind_loop.end event。
+  _mindloop_emit_event "mind_loop.end" \
+    ",\"cycle\":${CYCLE},\"exit_code\":${RC},\"duration_s\":${DURATION_S}"
 
   # 終了条件: signal 受信 / max-cycles 到達
   if [ "${RECEIVED_STOP}" = "1" ]; then
