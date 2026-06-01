@@ -1061,6 +1061,54 @@ class TestConductorJsonlLogging(unittest.TestCase):
         self.assertEqual(len(cycle_1_events), 4)
         self.assertEqual(len(cycle_2_events), 4)
 
+    def test_warden_inbox_ack_not_emitted_on_already_acked(self) -> None:
+        """Codex P2 (PR #128): Nexus.ack_dispatch が already_acked=True を返す
+        (= 既に archive 済み、何もしてない) ときは warden_inbox.ack を emit
+        しない & count しない。dispatch.acked と同じ基準 (新しい event だけ書く)。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+            {"msg_id": "id-b", "from": "bob", "topic": "t", "body": "b"},
+        ]
+        nexus_mock = MagicMock()
+        # id-a は新規 ack 成功、id-b は既に archive 済み
+        nexus_mock.ack_dispatch.side_effect = [
+            {"ok": True, "already_acked": False},
+            {"ok": True, "already_acked": True},
+        ]
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = self._run_happy_cycle()
+        events = self._read_events()
+        acks = [e for e in events if e["event"] == "warden_inbox.ack"]
+        # id-a だけが emit、id-b は emit されない
+        self.assertEqual(len(acks), 1)
+        self.assertEqual(acks[0]["msg_id"], "id-a")
+        # count も 1 (id-b は already_acked で count されない)
+        self.assertEqual(result.warden_replies_acked, 1)
+
+    def test_warden_inbox_ack_not_emitted_on_not_found(self) -> None:
+        """Codex P2 (PR #128): Nexus.ack_dispatch が ok=False (= message not
+        found) を返したら emit/count しない。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+        ]
+        nexus_mock = MagicMock()
+        nexus_mock.ack_dispatch.return_value = {
+            "ok": False, "error": "message not found: warden/id-a"
+        }
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = self._run_happy_cycle()
+        events = self._read_events()
+        self.assertEqual([e for e in events if e["event"] == "warden_inbox.ack"], [])
+        self.assertEqual(result.warden_replies_acked, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

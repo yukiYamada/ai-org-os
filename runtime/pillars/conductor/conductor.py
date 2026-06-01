@@ -288,16 +288,32 @@ def _ack_warden_inbox(msg_ids: list[str], cycle_number: int) -> int:
     acked = 0
     for msg_id in msg_ids:
         try:
-            nexus.ack_dispatch(WARDEN_SENDER_NAME, msg_id)
-            acked += 1
-            _emit_conductor_event(
-                "warden_inbox.ack", cycle=cycle_number, msg_id=msg_id
-            )
+            result = nexus.ack_dispatch(WARDEN_SENDER_NAME, msg_id)
         except Exception as exc:  # noqa: BLE001
             print(
                 f"[conductor] ack warden_inbox msg {msg_id} failed: {exc}",
                 file=sys.stderr,
             )
+            continue
+        # Codex P2 (PR #128): ack_dispatch は missing / already_acked では
+        # 例外を上げず ok=False / already_acked=True を返す。実際に archive
+        # へ移した cycle でだけ count & emit する (= PR-A の dispatch.acked
+        # 側と同じ基準: 「新しい event だけ書く」)。
+        if not result.get("ok"):
+            print(
+                f"[conductor] ack warden_inbox msg {msg_id} not archived: "
+                f"{result.get('error', 'unknown')}",
+                file=sys.stderr,
+            )
+            continue
+        if result.get("already_acked"):
+            # 前 cycle で archive 済み (= read と ack の間に他経路で ack)。
+            # 新しい event ではないので emit/count しない。
+            continue
+        acked += 1
+        _emit_conductor_event(
+            "warden_inbox.ack", cycle=cycle_number, msg_id=msg_id
+        )
     return acked
 
 
