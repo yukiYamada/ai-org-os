@@ -827,5 +827,288 @@ class TestRunLoop(unittest.TestCase):
         self.assertEqual(payload["last_cycle"]["cycle"], 3)
 
 
+class TestConductorJsonlLogging(unittest.TestCase):
+    """ADR-0026 §4.2 / §4.3: Conductor が conductor.jsonl に cycle / judgment /
+    warden_inbox event を書くこと。
+
+    setUp で AI_ORG_OS_HOME を tmp に向けるため、_default_logs_dir() は
+    tmp/logs/ を返す。よって event は tmp/logs/conductor.jsonl に書かれる。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name)
+        self.snapshots_dir = self.workspace / "snapshots"
+        self.snapshots_dir.mkdir()
+        self.issues_dir = self.workspace / "issues"
+        self.issues_dir.mkdir()
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.workspace)
+        (self.workspace / "registry" / "minds").mkdir(parents=True)
+        self.log_path = self.workspace / "logs" / "conductor.jsonl"
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    def _read_events(self) -> list[dict]:
+        if not self.log_path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run_happy_cycle(
+        self, cycle_number: int = 1, judgments_json: str | None = None
+    ) -> CycleResult:
+        """共通 happy path: 1 Mind / ok 判定。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        if judgments_json is None:
+            judgments_json = '[{"mind_name":"alice","action":"ok","reason":"r"}]'
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(judgments_json)
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            return run_one_cycle(
+                cycle_number,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+    def test_cycle_start_and_end_emitted(self) -> None:
+        """cycle.start と cycle.end が同 cycle で 1 件ずつ書かれる。"""
+        self._run_happy_cycle(cycle_number=7)
+        events = self._read_events()
+        starts = [e for e in events if e["event"] == "cycle.start"]
+        ends = [e for e in events if e["event"] == "cycle.end"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(starts[0]["cycle"], 7)
+        self.assertEqual(starts[0]["actor"], "conductor")
+        self.assertEqual(ends[0]["cycle"], 7)
+        # duration_ms は int で含まれる (0 以上)
+        self.assertIsInstance(ends[0]["duration_ms"], int)
+        self.assertGreaterEqual(ends[0]["duration_ms"], 0)
+        self.assertEqual(ends[0]["judgment_status"], "ok")
+
+    def test_cycle_end_after_start_in_log(self) -> None:
+        """順序: cycle.start → ... → cycle.end (append 順)。"""
+        self._run_happy_cycle()
+        events = self._read_events()
+        first_start = next(i for i, e in enumerate(events) if e["event"] == "cycle.start")
+        first_end = next(i for i, e in enumerate(events) if e["event"] == "cycle.end")
+        self.assertLess(first_start, first_end)
+
+    def test_judgment_invoked_on_happy_path(self) -> None:
+        """judge_snapshot が呼ばれる経路では judgment.invoked が出る。"""
+        self._run_happy_cycle()
+        events = self._read_events()
+        invoked = [e for e in events if e["event"] == "judgment.invoked"]
+        self.assertEqual(len(invoked), 1)
+        self.assertEqual(invoked[0]["input_minds"], 1)
+
+    def test_judgment_invoked_skipped_on_no_api_key(self) -> None:
+        """make_client が AnthropicNotConfigured を投げる経路では
+        judgment.invoked は出ない (= 実際に API を叩いていない)。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.make_client") as mock_make:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            from judgment import AnthropicNotConfigured
+            mock_make.side_effect = AnthropicNotConfigured("no key")
+            run_one_cycle(
+                1, client=None,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+        events = self._read_events()
+        self.assertEqual([e for e in events if e["event"] == "judgment.invoked"], [])
+        # judgment.result は出る (status = fallback-no-key)
+        results = [e for e in events if e["event"] == "judgment.result"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "fallback-no-key")
+
+    def test_judgment_result_emitted_even_when_skipped(self) -> None:
+        """Mind 0 件で skipped でも judgment.result は出る (status='skipped')。"""
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = {"minds": []}
+            run_one_cycle(
+                1, client=MagicMock(),
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+        events = self._read_events()
+        results = [e for e in events if e["event"] == "judgment.result"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "skipped")
+        self.assertEqual(results[0]["judgments_count"], 0)
+        self.assertEqual(results[0]["dispatches_planned"], 0)
+
+    def test_judgment_result_includes_dispatches_planned(self) -> None:
+        """dispatch-prompt action 数が dispatches_planned に出る。"""
+        # alice に dispatch-prompt 返却。registry にも登録して actuator が実走。
+        (self.workspace / "registry" / "minds" / "alice.md").write_text(
+            "---\nmind_name: alice\n---\n", encoding="utf-8"
+        )
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b"}]'
+        )
+        # send_dispatch を mock して storage 実体を呼ばない
+        with patch("conductor._send_dispatch_via_conduit"):
+            self._run_happy_cycle(judgments_json=judgments_json)
+        events = self._read_events()
+        results = [e for e in events if e["event"] == "judgment.result"]
+        self.assertEqual(results[0]["dispatches_planned"], 1)
+
+    def test_warden_inbox_read_emitted_when_replies_present(self) -> None:
+        """warden replies がある cycle では warden_inbox.read が 1 件出る。
+        count と msg_ids が同梱される。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+            {"msg_id": "id-b", "from": "bob", "topic": "t", "body": "b"},
+        ]
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch("conductor._ack_warden_inbox", return_value=2):
+            self._run_happy_cycle()
+        events = self._read_events()
+        reads = [e for e in events if e["event"] == "warden_inbox.read"]
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(reads[0]["count"], 2)
+        self.assertEqual(set(reads[0]["msg_ids"]), {"id-a", "id-b"})
+        # judgment.result の warden_replies_read も一致
+        result_evt = [e for e in events if e["event"] == "judgment.result"][0]
+        self.assertEqual(result_evt["warden_replies_read"], 2)
+
+    def test_warden_inbox_read_omitted_when_no_replies(self) -> None:
+        """warden replies 0 件なら warden_inbox.read は出さない (noise 削減)。"""
+        with patch("conductor._read_warden_inbox", return_value=[]):
+            self._run_happy_cycle()
+        events = self._read_events()
+        self.assertEqual([e for e in events if e["event"] == "warden_inbox.read"], [])
+
+    def test_warden_inbox_ack_emitted_per_msg(self) -> None:
+        """ack 成功した msg 毎に warden_inbox.ack が 1 件出る。
+        _ack_warden_inbox の実体を走らせるため Nexus を patch。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+            {"msg_id": "id-b", "from": "bob", "topic": "t", "body": "b"},
+        ]
+        # Nexus を mock して ack_dispatch を no-op に
+        nexus_mock = MagicMock()
+        nexus_mock.ack_dispatch.return_value = {"ok": True}
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            self._run_happy_cycle()
+        events = self._read_events()
+        acks = [e for e in events if e["event"] == "warden_inbox.ack"]
+        self.assertEqual(len(acks), 2)
+        self.assertEqual(set(a["msg_id"] for a in acks), {"id-a", "id-b"})
+
+    def test_warden_inbox_ack_not_emitted_on_fallback(self) -> None:
+        """Judgment 失敗時は ack を呼ばない → warden_inbox.ack も出ない。"""
+        fake_replies = [{"msg_id": "id-x", "from": "a", "topic": "t", "body": "b"}]
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.judge_snapshot",
+                   side_effect=RuntimeError("api down")), \
+             patch("conductor._read_warden_inbox", return_value=fake_replies):
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            run_one_cycle(
+                1, client=MagicMock(),
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+        events = self._read_events()
+        # warden_inbox.read は出る (= 取り込みは試みた)
+        self.assertEqual(
+            len([e for e in events if e["event"] == "warden_inbox.read"]), 1
+        )
+        # warden_inbox.ack は出ない
+        self.assertEqual(
+            [e for e in events if e["event"] == "warden_inbox.ack"], []
+        )
+        # judgment.result.status は fallback-error
+        result_evt = [e for e in events if e["event"] == "judgment.result"][0]
+        self.assertEqual(result_evt["status"], "fallback-error")
+
+    def test_multiple_cycles_append_to_same_file(self) -> None:
+        """2 cycle 連続実行で同 jsonl に append される。"""
+        self._run_happy_cycle(cycle_number=1)
+        self._run_happy_cycle(cycle_number=2)
+        events = self._read_events()
+        # 各 cycle で cycle.start + judgment.invoked + judgment.result + cycle.end = 4
+        cycle_1_events = [e for e in events if e.get("cycle") == 1]
+        cycle_2_events = [e for e in events if e.get("cycle") == 2]
+        self.assertEqual(len(cycle_1_events), 4)
+        self.assertEqual(len(cycle_2_events), 4)
+
+    def test_warden_inbox_ack_not_emitted_on_already_acked(self) -> None:
+        """Codex P2 (PR #128): Nexus.ack_dispatch が already_acked=True を返す
+        (= 既に archive 済み、何もしてない) ときは warden_inbox.ack を emit
+        しない & count しない。dispatch.acked と同じ基準 (新しい event だけ書く)。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+            {"msg_id": "id-b", "from": "bob", "topic": "t", "body": "b"},
+        ]
+        nexus_mock = MagicMock()
+        # id-a は新規 ack 成功、id-b は既に archive 済み
+        nexus_mock.ack_dispatch.side_effect = [
+            {"ok": True, "already_acked": False},
+            {"ok": True, "already_acked": True},
+        ]
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = self._run_happy_cycle()
+        events = self._read_events()
+        acks = [e for e in events if e["event"] == "warden_inbox.ack"]
+        # id-a だけが emit、id-b は emit されない
+        self.assertEqual(len(acks), 1)
+        self.assertEqual(acks[0]["msg_id"], "id-a")
+        # count も 1 (id-b は already_acked で count されない)
+        self.assertEqual(result.warden_replies_acked, 1)
+
+    def test_warden_inbox_ack_not_emitted_on_not_found(self) -> None:
+        """Codex P2 (PR #128): Nexus.ack_dispatch が ok=False (= message not
+        found) を返したら emit/count しない。"""
+        fake_replies = [
+            {"msg_id": "id-a", "from": "alice", "topic": "t", "body": "b"},
+        ]
+        nexus_mock = MagicMock()
+        nexus_mock.ack_dispatch.return_value = {
+            "ok": False, "error": "message not found: warden/id-a"
+        }
+        with patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = self._run_happy_cycle()
+        events = self._read_events()
+        self.assertEqual([e for e in events if e["event"] == "warden_inbox.ack"], [])
+        self.assertEqual(result.warden_replies_acked, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
