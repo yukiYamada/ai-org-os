@@ -92,7 +92,13 @@ PR を出す前の Reviewer 1 巡で、特に以下を厳しめに評価する:
 - `git log --oneline -20` で最近のマージ履歴
 - `gh issue list --state open` で残作業
 - `docs/adr/` 番号順に読めば設計の系譜が分かる
-- v0.4 milestone (Phase 5a Foundation) は完了、Phase 5b までで初版完成。残るは段階的拡張 (Observation ROADMAP #66/#67/#68 等) と Phase 5c (Mind 同士の運営層、guildmaster Persona 等)
+- **Phase 5a-5e 完了** (= ADR-0001〜0025): 不変項フレームワーク + Warden 双方向 outer loop (観察→判断→働きかけ→反応取り込み) が dogfooding で実機証明済み (2026-05-30)
+- **Phase 5f = 「Mind に任せられる Realm」**: tracking issue **#124**。4 段階:
+  1. Observability 強化 (#122) — 後追い可能性
+  2. 多 Mind dogfooding (gm + designer + implementer + reviewer)
+  3. Issue → PR 完全フロー検証 (信頼境界 axiom)
+  4. 失敗扱い整理 (#47 → ADR-0027 候補)
+- 完了基準: 「人間が Issue 投入 → 30 分放置 → PR が並ぶ → 人間が merge → 次の Issue へ」を 5 連続で事故なく回せる
 
 ## 6. 新セッション開始時のお勧めワークフロー
 
