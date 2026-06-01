@@ -255,11 +255,30 @@ def cmd_trace(
     """`observe.py --trace [--since ...]` のエントリ。
 
     戻り値: 終了コード (0=正常、2=arg error)。
+
+    Windows console は default で cp932 (#137)。JSONL は UTF-8 で保存
+    されているのに stdout が cp932 だと、日本語 topic/body が化けて
+    観察精度が落ちる。`sys.stdout` (Python 3.7+ TextIOWrapper) であれば
+    `reconfigure` を呼んで UTF-8 に切り替える。`errors="replace"` で
+    unmappable 文字は U+FFFD に degrade させ、クラッシュさせない。
+    StringIO 等 (test 注入 / pipe) は `reconfigure` を持たないので
+    自然に no-op となり、既存 test injection path を破壊しない。
+
+    ADR-0014 物理境界: 本処理は host 側 (B 穴あき) の出力 encoding 是正で、
+    container 内部の log 書き込み実装 (UTF-8 JSONL) には触れない。
     """
     if out is None:
         out = sys.stdout
     if stderr is None:
         stderr = sys.stderr
+    # #137 fix: Windows console (cp932) で日本語 topic/body が化けるのを防ぐ。
+    # hasattr で TextIOWrapper のみを対象にし、StringIO / mock を素通しする。
+    if hasattr(out, "reconfigure"):
+        try:
+            out.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except (ValueError, AttributeError):
+            # 既に UTF-8 だったり、reconfigure が無効な stream の場合は黙って続行
+            pass
     try:
         since_ts = parse_since(since)
     except ValueError as exc:

@@ -389,6 +389,59 @@ class TestCmdTrace(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("ERROR", err.getvalue())
 
+    def test_cmd_trace_handles_non_ascii_topic(self) -> None:
+        """Issue #137: 日本語 topic を含む event が StringIO 出力で
+        文字化けせず通る (StringIO は Python 内部で unicode を保持する
+        ため、これは format_event → print(file=out) 経路が non-ASCII
+        を素通しすることの確認)。"""
+        self._write(
+            "dispatch.jsonl",
+            [
+                {
+                    "ts": "2026-06-01T00:00:00.000Z",
+                    "event": "dispatch.sent",
+                    "actor": "conduit",
+                    "from": "warden",
+                    "to": "alice",
+                    "topic": "日本語テスト: の始点はあなた",
+                    "msg_id": "m1",
+                },
+            ],
+        )
+        out = io.StringIO()
+        rc = cmd_trace(logs_dir=self.logs, out=out, stderr=io.StringIO())
+        self.assertEqual(rc, 0)
+        text = out.getvalue()
+        self.assertIn("日本語テスト: の始点はあなた", text)
+
+    def test_cmd_trace_reconfigures_stdout_when_possible(self) -> None:
+        """Issue #137: out が `reconfigure` を持つ場合 (= 本番 sys.stdout の
+        TextIOWrapper)、UTF-8 / errors=replace で再構成される。StringIO は
+        `reconfigure` を持たないので、test injection path は破壊されない。"""
+
+        class _ReconfigurableStream:
+            """sys.stdout 風の最小 mock。write / flush + reconfigure を持つ。"""
+
+            def __init__(self) -> None:
+                self.buf = io.StringIO()
+                self.reconfigure_calls: list[dict] = []
+
+            def reconfigure(self, **kwargs: object) -> None:
+                self.reconfigure_calls.append(dict(kwargs))
+
+            def write(self, s: str) -> int:
+                return self.buf.write(s)
+
+            def flush(self) -> None:
+                self.buf.flush()
+
+        out = _ReconfigurableStream()
+        rc = cmd_trace(logs_dir=self.logs, out=out, stderr=io.StringIO())
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(out.reconfigure_calls), 1)
+        self.assertEqual(out.reconfigure_calls[0].get("encoding"), "utf-8")
+        self.assertEqual(out.reconfigure_calls[0].get("errors"), "replace")
+
 
 if __name__ == "__main__":
     unittest.main()
