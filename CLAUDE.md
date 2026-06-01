@@ -94,8 +94,8 @@ PR を出す前の Reviewer 1 巡で、特に以下を厳しめに評価する:
 - `docs/adr/` 番号順に読めば設計の系譜が分かる
 - **Phase 5a-5e 完了** (= ADR-0001〜0025): 不変項フレームワーク + Warden 双方向 outer loop (観察→判断→働きかけ→反応取り込み) が dogfooding で実機証明済み (2026-05-30)
 - **Phase 5f = 「Mind に任せられる Realm」**: tracking issue **#124**。4 段階:
-  1. Observability 強化 (#122) — 後追い可能性
-  2. 多 Mind dogfooding (gm + designer + implementer + reviewer)
+  1. Observability 強化 (#122) — 後追い可能性 → **完了 (ADR-0026 + PR-A〜F = #127-131, #139)、observe.py --trace で全 event 時系列復元可**
+  2. 多 Mind dogfooding (gm + designer + implementer + reviewer) — **着手済 / 初回成功 (2026-06-01)**: 4 Mind が Persona 駆動で `gm-default → alice → bob → carol` の Issue claim → design → 実装 → review-request チェーンを完走、bob は実際にコード (`idle_time.py` + 8 tests) を作成。観察された不具合は **6 件 issue 起票 (#133-138)**、うち 3 件は同日 fix merged (#139 rotation, #140 trace UTF-8, #141 kill-mind orphans)。残り: #134 (gm cycle 2 が 640s 異常遅延、RCA は H1 観察量増加 が likely)、#136 (dispatch 到着 race)、#138 (Realm Inbox 消化責任の Persona 配分)。
   3. Issue → PR 完全フロー検証 (信頼境界 axiom)
   4. 失敗扱い整理 (#47 → ADR-0027 候補)
 - 完了基準: 「人間が Issue 投入 → 30 分放置 → PR が並ぶ → 人間が merge → 次の Issue へ」を 5 連続で事故なく回せる
