@@ -1089,6 +1089,28 @@ class TestConductorJsonlLogging(unittest.TestCase):
         # count も 1 (id-b は already_acked で count されない)
         self.assertEqual(result.warden_replies_acked, 1)
 
+    def test_actuator_events_go_to_separate_file(self) -> None:
+        """ADR-0026 §1: actuator.* event は actuator.jsonl に書かれる
+        (conductor.jsonl ではない)。"""
+        (self.workspace / "registry" / "minds" / "alice.md").write_text(
+            "---\nmind_name: alice\n---\n", encoding="utf-8"
+        )
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b"}]'
+        )
+        with patch("conductor._send_dispatch_via_conduit", return_value="msg-1"):
+            self._run_happy_cycle(judgments_json=judgments_json)
+        # conductor.jsonl に actuator.* が混ざっていないこと
+        events = self._read_events()
+        actuator_events_in_conductor = [
+            e for e in events if e["event"].startswith("actuator.")
+        ]
+        self.assertEqual(actuator_events_in_conductor, [])
+        # actuator.jsonl に書かれていること
+        actuator_log = self.workspace / "logs" / "actuator.jsonl"
+        self.assertTrue(actuator_log.exists())
+
     def test_warden_inbox_ack_not_emitted_on_not_found(self) -> None:
         """Codex P2 (PR #128): Nexus.ack_dispatch が ok=False (= message not
         found) を返したら emit/count しない。"""
@@ -1108,6 +1130,193 @@ class TestConductorJsonlLogging(unittest.TestCase):
         events = self._read_events()
         self.assertEqual([e for e in events if e["event"] == "warden_inbox.ack"], [])
         self.assertEqual(result.warden_replies_acked, 0)
+
+
+class TestActuatorJsonlLogging(unittest.TestCase):
+    """ADR-0026 §4.4: actuator が actuator.jsonl に prompt/skipped event を書く。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name)
+        self.snapshots_dir = self.workspace / "snapshots"
+        self.snapshots_dir.mkdir()
+        self.issues_dir = self.workspace / "issues"
+        self.issues_dir.mkdir()
+        self._old_home = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.workspace)
+        self.registry_minds = self.workspace / "registry" / "minds"
+        self.registry_minds.mkdir(parents=True)
+        self.log_path = self.workspace / "logs" / "actuator.jsonl"
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    def _register(self, mind_name: str) -> None:
+        (self.registry_minds / f"{mind_name}.md").write_text(
+            f"---\nmind_name: {mind_name}\n---\n", encoding="utf-8"
+        )
+
+    def _read_events(self) -> list[dict]:
+        if not self.log_path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run_cycle_with_judgments(
+        self, judgments_json: str, mind_names: list[str] | None = None
+    ) -> CycleResult:
+        """judge_snapshot は snapshot minds と LLM judgments の Mind 名の
+        完全一致を要求するため、mind_names で snapshot を合わせる必要がある。
+        デフォルトは ["alice"] (= 1-mind cases)。
+        """
+        if mind_names is None:
+            mind_names = ["alice"]
+        snapshot_payload = {"minds": [{"mind_name": n} for n in mind_names]}
+        client = MagicMock()
+        client.messages.create.return_value = _mock_anthropic_message(judgments_json)
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            return run_one_cycle(
+                1,
+                client=client,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+    def test_prompt_event_on_successful_dispatch(self) -> None:
+        """ADR §4.4: 成功時 actuator.prompt { target, topic, msg_id, result:ok }"""
+        self._register("alice")
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"status?","dispatch_body":"What are you doing?"}]'
+        )
+        with patch("conductor._send_dispatch_via_conduit", return_value="msg-abc"):
+            self._run_cycle_with_judgments(judgments_json)
+        events = self._read_events()
+        prompts = [e for e in events if e["event"] == "actuator.prompt"]
+        self.assertEqual(len(prompts), 1)
+        p = prompts[0]
+        self.assertEqual(p["actor"], "actuator")
+        self.assertEqual(p["target"], "alice")
+        self.assertEqual(p["topic"], "status?")
+        self.assertEqual(p["msg_id"], "msg-abc")
+        self.assertEqual(p["result"], "ok")
+        self.assertEqual(p["cycle"], 1)
+
+    def test_skipped_event_on_not_in_registry(self) -> None:
+        """registry 未登録 → actuator.skipped reason=not_in_registry"""
+        # alice は意図的に未登録
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b"}]'
+        )
+        with patch("conductor._send_dispatch_via_conduit") as mock_send:
+            self._run_cycle_with_judgments(judgments_json)
+        events = self._read_events()
+        skipped = [e for e in events if e["event"] == "actuator.skipped"]
+        self.assertEqual(len(skipped), 1)
+        s = skipped[0]
+        self.assertEqual(s["target"], "alice")
+        self.assertEqual(s["reason"], "not_in_registry")
+        self.assertEqual(s["actor"], "actuator")
+        # send は呼ばれない (registry check で弾かれた)
+        mock_send.assert_not_called()
+        # actuator.prompt は出ない
+        self.assertEqual([e for e in events if e["event"] == "actuator.prompt"], [])
+
+    def test_skipped_event_on_send_failure(self) -> None:
+        """send_dispatch が例外 → actuator.skipped reason=send_failed + error"""
+        self._register("alice")
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"t","dispatch_body":"b"}]'
+        )
+        with patch(
+            "conductor._send_dispatch_via_conduit",
+            side_effect=RuntimeError("storage error"),
+        ):
+            result = self._run_cycle_with_judgments(judgments_json)
+        events = self._read_events()
+        skipped = [e for e in events if e["event"] == "actuator.skipped"]
+        self.assertEqual(len(skipped), 1)
+        s = skipped[0]
+        self.assertEqual(s["target"], "alice")
+        self.assertEqual(s["reason"], "send_failed")
+        self.assertIn("storage error", s["error"])
+        self.assertIn("RuntimeError", s["error"])
+        # 成功 dispatch は 0
+        self.assertEqual(result.dispatches_sent, 0)
+        # actuator.prompt は出ない (send 失敗)
+        self.assertEqual([e for e in events if e["event"] == "actuator.prompt"], [])
+
+    def test_mixed_success_and_skip(self) -> None:
+        """alice(登録あり成功) + carol(未登録) で prompt 1 件 + skipped 1 件。"""
+        self._register("alice")
+        judgments_json = (
+            '[{"mind_name":"alice","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"ta","dispatch_body":"ba"},'
+            '{"mind_name":"carol","action":"dispatch-prompt","reason":"r",'
+            '"dispatch_topic":"tc","dispatch_body":"bc"}]'
+        )
+        with patch("conductor._send_dispatch_via_conduit", return_value="m1"):
+            self._run_cycle_with_judgments(
+                judgments_json, mind_names=["alice", "carol"]
+            )
+        events = self._read_events()
+        prompts = [e for e in events if e["event"] == "actuator.prompt"]
+        skipped = [e for e in events if e["event"] == "actuator.skipped"]
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["target"], "alice")
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["target"], "carol")
+        self.assertEqual(skipped[0]["reason"], "not_in_registry")
+
+    def test_no_events_when_no_dispatch_prompt(self) -> None:
+        """action=ok のみの cycle では actuator event は出ない (= file 未生成)。"""
+        self._register("alice")
+        judgments_json = '[{"mind_name":"alice","action":"ok","reason":"healthy"}]'
+        with patch("conductor._send_dispatch_via_conduit"):
+            self._run_cycle_with_judgments(judgments_json)
+        self.assertFalse(self.log_path.exists())
+
+    def test_send_via_conduit_returns_msg_id(self) -> None:
+        """_send_dispatch_via_conduit が Nexus 結果から msg_id を返すこと。
+        actuator.prompt の msg_id field のために追加した拡張 (PR-C)。"""
+        from conductor import _send_dispatch_via_conduit
+
+        nexus_mock = MagicMock()
+        nexus_mock.send_dispatch.return_value = {
+            "ok": True, "msg_id": "20260601T000000Z-warden-deadbeef",
+            "dispatched_at": "...", "stored_at": "...",
+        }
+        with patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = _send_dispatch_via_conduit(to_mind="alice", topic="t", body="b")
+        self.assertEqual(result, "20260601T000000Z-warden-deadbeef")
+
+    def test_send_via_conduit_returns_none_on_not_ok(self) -> None:
+        """Nexus が ok=False を返した場合 msg_id は None (= 未送信)。"""
+        from conductor import _send_dispatch_via_conduit
+
+        nexus_mock = MagicMock()
+        nexus_mock.send_dispatch.return_value = {"ok": False, "error": "..."}
+        with patch.dict("sys.modules"):
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            result = _send_dispatch_via_conduit(to_mind="alice", topic="t", body="b")
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
