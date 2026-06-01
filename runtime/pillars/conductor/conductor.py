@@ -163,6 +163,21 @@ def _emit_conductor_event(event: str, **fields: Any) -> None:
     )
 
 
+def _emit_actuator_event(event: str, **fields: Any) -> None:
+    """actuator.jsonl に 1 event を書く薄いラッパ (ADR-0026 §4.4)。
+
+    actor は固定で "actuator"。物理的な書き手は本ファイル
+    (conductor.py) 内の _actuate_dispatches だが、ADR §3 の actor は
+    「役割」を示すため、actuator 経路の event は actor="actuator"。
+    """
+    write_event(
+        _default_logs_dir() / "actuator.jsonl",
+        event=event,
+        actor="actuator",
+        **fields,
+    )
+
+
 # Phase 5e Step B: Warden が Mind に dispatch を送るときの sender 名。
 # Mind→Mind dispatch との区別 (= 「Warden が指示してきた」と Mind 側で
 # 識別可能) のため、固定値 "warden" を予約する。judgment.py 側の同名
@@ -172,7 +187,7 @@ WARDEN_SENDER_NAME = "warden"
 
 def _send_dispatch_via_conduit(
     *, to_mind: str, topic: str, body: str
-) -> None:
+) -> str | None:
     """Conduit Pillar の Nexus.send_dispatch を呼ぶ薄いラッパ。
 
     遅延 import: storage.py は FastMCP / pyyaml 等を間接的に引きずるため、
@@ -183,17 +198,22 @@ def _send_dispatch_via_conduit(
     identity binding は使わない (= Nexus(identity=None)) — Warden は
     どの Mind でもないので。authorize check は実質スキップされ、from_mind
     の name validation のみ効く。
+
+    返り値: 成功時 msg_id (str)、Nexus が ok=False を返した場合は None。
+    actuator.prompt event を発火する側で msg_id を log に含めるための拡張
+    (ADR-0026 PR-C)。既存呼び出し側は返り値を無視できる。
     """
     sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "conduit"))
     from storage import Nexus  # noqa: E402
 
     nexus = Nexus()
-    nexus.send_dispatch(
+    result = nexus.send_dispatch(
         from_mind=WARDEN_SENDER_NAME,
         to_mind=to_mind,
         topic=topic,
         body=body,
     )
+    return result.get("msg_id") if result.get("ok") else None
 
 
 # Phase 5e Step D / ADR-0025: warden inbox feedback loop.
@@ -364,6 +384,12 @@ def _actuate_dispatches(
                 f"{j.mind_name}: missing topic/body",
                 file=sys.stderr,
             )
+            _emit_actuator_event(
+                "actuator.skipped",
+                cycle=cycle_number,
+                target=j.mind_name,
+                reason="missing_topic_body",
+            )
             continue
         # Issue #113: registry-first invariant — judgment 時点で snapshot
         # に居ても、actuator 実行時点で kill 進行中なら skip。
@@ -374,14 +400,19 @@ def _actuate_dispatches(
                 f"(killed between judgment and actuator)",
                 file=sys.stderr,
             )
+            _emit_actuator_event(
+                "actuator.skipped",
+                cycle=cycle_number,
+                target=j.mind_name,
+                reason="not_in_registry",
+            )
             continue
         try:
-            _send_dispatch_via_conduit(
+            msg_id = _send_dispatch_via_conduit(
                 to_mind=j.mind_name,
                 topic=j.dispatch_topic,
                 body=j.dispatch_body,
             )
-            sent += 1
         except Exception as exc:  # noqa: BLE001 — actuator は止まらない
             print(
                 f"[conductor][cycle {cycle_number}] send_dispatch to "
@@ -389,6 +420,23 @@ def _actuate_dispatches(
                 file=sys.stderr,
             )
             traceback.print_exc(file=sys.stderr)
+            _emit_actuator_event(
+                "actuator.skipped",
+                cycle=cycle_number,
+                target=j.mind_name,
+                reason="send_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            continue
+        sent += 1
+        _emit_actuator_event(
+            "actuator.prompt",
+            cycle=cycle_number,
+            target=j.mind_name,
+            topic=j.dispatch_topic,
+            msg_id=msg_id,
+            result="ok",
+        )
     return sent
 
 
