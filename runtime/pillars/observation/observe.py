@@ -16,6 +16,7 @@ Usage:
   python3 runtime/pillars/observation/observe.py --anomaly  # W1-W3 / I1-I2 signals (#67)
   python3 runtime/pillars/observation/observe.py --diff <prev> --against <curr>  # snapshot diff (#67)
   python3 runtime/pillars/observation/observe.py --for-warden  # integrated JSON (snapshot+flow+resource+anomaly, #68)
+  python3 runtime/pillars/observation/observe.py --trace [--since 1h]  # JSONL event time-line (#122, ADR-0026)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
@@ -498,6 +499,21 @@ def _parse_path_option(argv: list[str], name: str) -> Path | None:
     return Path(argv[idx + 1])
 
 
+def _parse_str_option(argv: list[str], name: str) -> str | None:
+    """`--name VALUE` の文字列引数を取り出す。無ければ None。
+
+    Phase 5f Step 1 / ADR-0026: --since 等の string 引数用。既存の
+    _parse_int_option / _parse_path_option と対称な薄い helper。
+    """
+    if name not in argv:
+        return None
+    idx = argv.index(name)
+    if idx + 1 >= len(argv):
+        print(f"[ERROR] {name} requires a value", file=sys.stderr)
+        raise SystemExit(2)
+    return argv[idx + 1]
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     as_json = "--json" in argv
@@ -508,8 +524,19 @@ def main(argv: list[str] | None = None) -> int:
     as_resource = "--resource" in argv
     as_anomaly = "--anomaly" in argv
     as_for_warden = "--for-warden" in argv
+    as_trace = "--trace" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
+
+    # Phase 5f Step 1 / ADR-0026: --trace は他フラグ無視で時系列ビューのみ。
+    # 全 JSONL を merge sort して人間可読 1 行に整形する。他の --realm 等とは
+    # 独立 (--json と組み合わせない、人間可読限定)。
+    if as_trace:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from trace import cmd_trace  # noqa: PLC0415
+
+        since = _parse_str_option(argv, "--since")
+        return cmd_trace(since=since)
 
     now_epoch = time.time()
 
