@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from event_log import _default_logs_dir, write_event
+
 
 def _default_storage_dir() -> Path:
     """$AI_ORG_OS_HOME/conduit-storage/ (Phase 5b-4 / ADR-0018)。
@@ -110,11 +112,16 @@ class Nexus:
         self,
         storage_dir: Path | str | None = None,
         identity: str | None = None,
+        logs_dir: Path | str | None = None,
     ) -> None:
         base = Path(storage_dir) if storage_dir is not None else _default_storage_dir()
         self.storage_dir = base.resolve()
         self.inbox_dir = self.storage_dir / "inbox"
         self.archive_dir = self.storage_dir / "archive"
+        # ADR-0026: 構造化ログ書き込み先。明示指定が無ければ
+        # $AI_ORG_OS_HOME/logs/ にフォールバック。テストは tmp dir を渡す。
+        logs_base = Path(logs_dir) if logs_dir is not None else _default_logs_dir()
+        self.logs_dir = logs_base.resolve()
         # When identity is provided, validate its shape so it cannot be a path traversal etc.
         if identity is not None:
             _validate_mind_name(identity, "identity")
@@ -193,6 +200,18 @@ class Nexus:
             f"{body}\n"
         )
         msg_path.write_text(content, encoding="utf-8")
+        # ADR-0026 §4.1: dispatch.sent event を JSONL に記録。
+        # F3 準拠なので write_event 自体が失敗しても以下の return は影響を受けない。
+        # `from` は Python 予約語のため **{"from": ...} で渡す。
+        write_event(
+            self.logs_dir / "dispatch.jsonl",
+            event="dispatch.sent",
+            actor="conduit",
+            **{"from": from_mind},
+            to=to_mind,
+            topic=topic,
+            msg_id=msg_id,
+        )
         return {
             "ok": True,
             "msg_id": msg_id,
@@ -250,4 +269,14 @@ class Nexus:
 
         dst_dir.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
+        # ADR-0026 §4.1: dispatch.acked event を JSONL に記録。
+        # 実際に archive へ移した時のみ書く (already_acked / not_found は書かない =
+        # cycle に新しい情報がないため)。
+        write_event(
+            self.logs_dir / "dispatch.jsonl",
+            event="dispatch.acked",
+            actor="conduit",
+            by=mind_name,
+            msg_id=msg_id,
+        )
         return {"ok": True, "archived_at": str(dst), "already_acked": False}

@@ -25,7 +25,10 @@ class NexusTestBase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_dir = Path(self._tmp.name)
-        self.nexus = Nexus(storage_dir=self.tmp_dir)
+        # ADR-0026: logs_dir を tmp 配下に固定して、本物の ~/.ai-org-os/logs/
+        # を test が汚さないようにする。
+        self.logs_dir = self.tmp_dir / "logs"
+        self.nexus = Nexus(storage_dir=self.tmp_dir, logs_dir=self.logs_dir)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -165,19 +168,22 @@ class TestIdentityBinding(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_dir = Path(self._tmp.name)
+        # ADR-0026: 全 Nexus に渡す logs_dir を統一して、本物の
+        # ~/.ai-org-os/logs/ を test が汚さないようにする。
+        self.logs_dir = self.tmp_dir / "logs"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
     def test_invalid_identity_rejected_at_init(self) -> None:
         with self.assertRaises(ValueError):
-            Nexus(storage_dir=self.tmp_dir, identity="../escape")
+            Nexus(storage_dir=self.tmp_dir, identity="../escape", logs_dir=self.logs_dir)
 
     def test_reserved_identity_warden_rejected_at_init(self) -> None:
         """Issue #112 / ADR-0024 §3: Mind が 'warden' として MCP server を
         立ち上げられない (Warden 偽装防止)。"""
         with self.assertRaises(ValueError) as ctx:
-            Nexus(storage_dir=self.tmp_dir, identity="warden")
+            Nexus(storage_dir=self.tmp_dir, identity="warden", logs_dir=self.logs_dir)
         self.assertIn("reserved", str(ctx.exception).lower())
         self.assertIn("warden", str(ctx.exception))
 
@@ -185,7 +191,7 @@ class TestIdentityBinding(unittest.TestCase):
         """identity=None (= Conductor/Warden 経路) は warden を from_mind に
         使えなければ Step B actuator が壊れる。予約語チェックは Mind 名
         (identity) にのみ適用、from_mind には適用しない。"""
-        nx = Nexus(storage_dir=self.tmp_dir)  # identity=None
+        nx = Nexus(storage_dir=self.tmp_dir, logs_dir=self.logs_dir)  # identity=None
         result = nx.send_dispatch(
             from_mind="warden", to_mind="bob", topic="t", body="x"
         )
@@ -193,17 +199,17 @@ class TestIdentityBinding(unittest.TestCase):
 
     def test_unbound_nexus_accepts_any_mind(self) -> None:
         # 既存挙動の維持（identity=None で誰の名前でも OK）。
-        nx = Nexus(storage_dir=self.tmp_dir)
+        nx = Nexus(storage_dir=self.tmp_dir, logs_dir=self.logs_dir)
         result = nx.send_dispatch(from_mind="anyone", to_mind="other", topic="t", body="x")
         self.assertTrue(result["ok"])
 
     def test_bound_nexus_accepts_matching_from_mind(self) -> None:
-        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
         result = nx.send_dispatch(from_mind="alice", to_mind="bob", topic="t", body="x")
         self.assertTrue(result["ok"])
 
     def test_bound_nexus_rejects_impersonation_in_send(self) -> None:
-        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
         with self.assertRaises(AuthorizationError) as ctx:
             nx.send_dispatch(from_mind="bob", to_mind="carol", topic="t", body="x")
         self.assertIn("alice", str(ctx.exception))
@@ -214,25 +220,25 @@ class TestIdentityBinding(unittest.TestCase):
         self.assertNotIsInstance(ctx.exception, PermissionError)
 
     def test_bound_nexus_rejects_reading_other_inbox(self) -> None:
-        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
         with self.assertRaises(AuthorizationError):
             nx.read_inbox(mind_name="bob")
 
     def test_bound_nexus_accepts_reading_own_inbox(self) -> None:
-        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
         result = nx.read_inbox(mind_name="alice")
         self.assertTrue(result["ok"])
 
     def test_bound_nexus_rejects_acking_other_message(self) -> None:
         # alice's session cannot ack messages addressed to bob.
-        nx = Nexus(storage_dir=self.tmp_dir, identity="alice")
+        nx = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
         with self.assertRaises(AuthorizationError):
             nx.ack_dispatch(mind_name="bob", msg_id="20260523T000000Z-x-deadbeef")
 
     def test_bound_nexus_can_ack_own_message_end_to_end(self) -> None:
         # alice sends to bob; bob's session acks it. Two distinct bound sessions.
-        nx_alice = Nexus(storage_dir=self.tmp_dir, identity="alice")
-        nx_bob = Nexus(storage_dir=self.tmp_dir, identity="bob")
+        nx_alice = Nexus(storage_dir=self.tmp_dir, identity="alice", logs_dir=self.logs_dir)
+        nx_bob = Nexus(storage_dir=self.tmp_dir, identity="bob", logs_dir=self.logs_dir)
 
         sent = nx_alice.send_dispatch(from_mind="alice", to_mind="bob", topic="t", body="hi")
         msg_id = sent["msg_id"]
@@ -255,6 +261,75 @@ class TestIdentityBinding(unittest.TestCase):
         # distinguish identity denials from OS-level fs permission errors.
         self.assertFalse(issubclass(AuthorizationError, PermissionError))
         self.assertTrue(issubclass(AuthorizationError, Exception))
+
+
+class TestDispatchJsonlLogging(NexusTestBase):
+    """ADR-0026 §4.1: send_dispatch / ack_dispatch が dispatch.jsonl に記録する。"""
+
+    def _read_log_lines(self) -> list[dict]:
+        import json
+
+        log_path = self.logs_dir / "dispatch.jsonl"
+        if not log_path.exists():
+            return []
+        return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    def test_send_writes_dispatch_sent_event(self) -> None:
+        result = self.nexus.send_dispatch(
+            from_mind="alice", to_mind="bob", topic="hello", body="hi"
+        )
+        rows = self._read_log_lines()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["event"], "dispatch.sent")
+        self.assertEqual(row["actor"], "conduit")
+        self.assertEqual(row["from"], "alice")
+        self.assertEqual(row["to"], "bob")
+        self.assertEqual(row["topic"], "hello")
+        self.assertEqual(row["msg_id"], result["msg_id"])
+
+    def test_ack_writes_dispatch_acked_event(self) -> None:
+        sent = self.nexus.send_dispatch(
+            from_mind="alice", to_mind="bob", topic="t", body="x"
+        )
+        self.nexus.ack_dispatch(mind_name="bob", msg_id=sent["msg_id"])
+        rows = self._read_log_lines()
+        # send + ack で 2 行
+        self.assertEqual(len(rows), 2)
+        ack_row = rows[1]
+        self.assertEqual(ack_row["event"], "dispatch.acked")
+        self.assertEqual(ack_row["actor"], "conduit")
+        self.assertEqual(ack_row["by"], "bob")
+        self.assertEqual(ack_row["msg_id"], sent["msg_id"])
+
+    def test_already_acked_does_not_emit_duplicate_event(self) -> None:
+        """2 回目の ack (= already_acked) は log line を増やさない。"""
+        sent = self.nexus.send_dispatch(
+            from_mind="alice", to_mind="bob", topic="t", body="x"
+        )
+        self.nexus.ack_dispatch(mind_name="bob", msg_id=sent["msg_id"])
+        before = len(self._read_log_lines())
+        # 2 回目: already_acked になる
+        result = self.nexus.ack_dispatch(mind_name="bob", msg_id=sent["msg_id"])
+        self.assertTrue(result["already_acked"])
+        after = len(self._read_log_lines())
+        self.assertEqual(before, after, "already_acked should NOT emit dispatch.acked")
+
+    def test_not_found_ack_does_not_emit_event(self) -> None:
+        """存在しない msg_id への ack は ok=False で、log line も増やさない。"""
+        result = self.nexus.ack_dispatch(
+            mind_name="bob", msg_id="20260522T000000Z-x-deadbeef"
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(self._read_log_lines(), [])
+
+    def test_log_file_not_created_on_invalid_send(self) -> None:
+        """validation で raise する経路では log を書かない (= write 後に到達不能)。"""
+        with self.assertRaises(ValueError):
+            self.nexus.send_dispatch(
+                from_mind="../evil", to_mind="bob", topic="t", body="x"
+            )
+        self.assertEqual(self._read_log_lines(), [])
 
 
 if __name__ == "__main__":
