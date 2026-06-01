@@ -50,6 +50,11 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "observation"))
 sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "inbox"))
 sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "judgment"))
+# Phase 5f Step 1 / ADR-0026 PR-B: 構造化ログ書き込みのため conduit Pillar の
+# event_log util を共有。Pillar 間 import は ADR-0010 §6 で許可。後続 PR-C 以降
+# も同パターンを取るため、event_log は事実上の shared util。重複が増えたら
+# runtime/lib/ への移動を検討 (= 別 PR)。
+sys.path.insert(0, str(RUNTIME_DIR / "pillars" / "conduit"))
 
 # 他 Pillar の API を import。失敗したら起動できないのでこれは fatal。
 from snapshot import load_snapshot, write_snapshot  # noqa: E402
@@ -64,6 +69,7 @@ from judgment import (  # noqa: E402
     judge_snapshot,
     make_client,
 )
+from event_log import _default_logs_dir, write_event  # noqa: E402
 
 DEFAULT_PERIOD_S = 30
 
@@ -141,6 +147,20 @@ def _action_breakdown(judgments: list[MindJudgment]) -> dict[str, int]:
     for j in judgments:
         breakdown[j.action] = breakdown.get(j.action, 0) + 1
     return breakdown
+
+
+def _emit_conductor_event(event: str, **fields: Any) -> None:
+    """conductor.jsonl に 1 event を書く薄いラッパ (ADR-0026 §4.2 / §4.3)。
+
+    F3 準拠 (失敗で cycle break しない) は write_event 側で完結。本ラッパは
+    呼び出し側の冗長を減らすだけ。actor は固定で "conductor"。
+    """
+    write_event(
+        _default_logs_dir() / "conductor.jsonl",
+        event=event,
+        actor="conductor",
+        **fields,
+    )
 
 
 # Phase 5e Step B: Warden が Mind に dispatch を送るときの sender 名。
@@ -247,12 +267,15 @@ def _read_warden_inbox() -> list[dict[str, str]]:
     return parsed
 
 
-def _ack_warden_inbox(msg_ids: list[str]) -> int:
+def _ack_warden_inbox(msg_ids: list[str], cycle_number: int) -> int:
     """warden inbox の特定メッセージ群を ack (archive に移動)。
 
     Phase 5e Step D / ADR-0025: Judgment 呼び出し成功 (status="ok") 後に
     のみ呼ぶ。fallback ルートでは ack しない = 次 cycle で再読み込みされて
     Judgment に再度渡される (at-least-once 配送)。
+
+    Phase 5f Step 1 / ADR-0026 §4.3: 成功した ack 毎に warden_inbox.ack event
+    を conductor.jsonl に記録する。cycle_number は event の field。
 
     返り値: 成功 ack 件数。1 件失敗が他を巻き込まないよう個別 try/except。
     """
@@ -267,6 +290,9 @@ def _ack_warden_inbox(msg_ids: list[str]) -> int:
         try:
             nexus.ack_dispatch(WARDEN_SENDER_NAME, msg_id)
             acked += 1
+            _emit_conductor_event(
+                "warden_inbox.ack", cycle=cycle_number, msg_id=msg_id
+            )
         except Exception as exc:  # noqa: BLE001
             print(
                 f"[conductor] ack warden_inbox msg {msg_id} failed: {exc}",
@@ -371,6 +397,8 @@ def run_one_cycle(
     - Judgment 失敗 → fallback "monitor"
     """
     started_at = _utcnow()
+    # ADR-0026 §4.2: cycle.start event。
+    _emit_conductor_event("cycle.start", cycle=cycle_number)
 
     # ---- step 1: Inbox poll
     try:
@@ -421,6 +449,14 @@ def run_one_cycle(
     # 追加する。Judgment 呼び出し成功時のみ後段で ack する (at-least-once)。
     warden_replies = _read_warden_inbox()
     if warden_replies:
+        # ADR-0026 §4.3: warden_inbox.read event。count == 0 のときは出さない
+        # (= cycle に新しい情報がないため)。msg_ids は ADR 例に従い同梱。
+        _emit_conductor_event(
+            "warden_inbox.read",
+            cycle=cycle_number,
+            count=len(warden_replies),
+            msg_ids=[r.get("msg_id") for r in warden_replies if r.get("msg_id")],
+        )
         # judgment_input を変更前に shallow copy (build_realm_report の戻り値を
         # 直接 mutate しないよう防御)
         judgment_input = {**judgment_input, "warden_inbox": warden_replies}
@@ -446,6 +482,13 @@ def run_one_cycle(
                 judgment_error = str(exc)
 
         if judgment_status == "ok":
+            # ADR-0026 §4.2: judgment.invoked event。実際に judge_snapshot を
+            # 呼ぶ瞬間にのみ emit (fallback-no-key 等で呼ばない経路では出さない)。
+            _emit_conductor_event(
+                "judgment.invoked",
+                cycle=cycle_number,
+                input_minds=len(judgment_input.get("minds", [])),
+            )
             try:
                 # judgment は snapshot/report 両方を上位互換で受理する (Phase 5e)
                 judgments = judge_snapshot(judgment_input, client=local_client)
@@ -462,6 +505,19 @@ def run_one_cycle(
                 judgment_status = "fallback-error"
                 judgment_error = str(exc)
 
+    # ADR-0026 §4.2: judgment.result event。skipped / ok / fallback-* いずれの
+    # 経路も最終 status を 1 回 emit。dispatches_planned は判定結果中の
+    # dispatch-prompt 数 (= actuator に渡る予定数)。
+    dispatches_planned = sum(1 for j in judgments if j.action == "dispatch-prompt")
+    _emit_conductor_event(
+        "judgment.result",
+        cycle=cycle_number,
+        status=judgment_status,
+        judgments_count=len(judgments),
+        dispatches_planned=dispatches_planned,
+        warden_replies_read=len(warden_replies),
+    )
+
     # ---- step 5: actuator (Phase 5e Step B)
     # 判定結果から dispatch-prompt の MindJudgment を抽出し、Conduit Pillar の
     # send_dispatch で Mind の inbox に投入する。Warden actuator の最初の経路。
@@ -477,9 +533,18 @@ def run_one_cycle(
     warden_replies_acked = 0
     if judgment_status == "ok" and warden_replies:
         msg_ids = [r["msg_id"] for r in warden_replies if r.get("msg_id")]
-        warden_replies_acked = _ack_warden_inbox(msg_ids)
+        warden_replies_acked = _ack_warden_inbox(msg_ids, cycle_number)
 
     ended_at = _utcnow()
+    # ADR-0026 §4.2: cycle.end event。duration_ms は本物 (秒精度の _iso
+    # 表現ではなく datetime 差分から計算)。
+    duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+    _emit_conductor_event(
+        "cycle.end",
+        cycle=cycle_number,
+        duration_ms=duration_ms,
+        judgment_status=judgment_status,
+    )
     result = CycleResult(
         cycle=cycle_number,
         started_at=_iso(started_at),
