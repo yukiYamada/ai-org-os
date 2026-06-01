@@ -137,8 +137,12 @@ verify_loop_owner() {
   fi
   local has_script=0 has_mind=0 arg
   while IFS= read -r -d '' arg; do
+    # Windows + MSYS で Python subprocess 経由で bash を呼ぶと argv[1] が
+    # backslash 区切りの Windows path になる (例:
+    # "C:\Users\...\mind-loop.sh") ため、forward-slash と backslash の両方を
+    # 受け入れる (kill-mind.sh の verify_loop_owner と整合)。
     case "${arg}" in
-      mind-loop.sh|*/mind-loop.sh) has_script=1 ;;
+      mind-loop.sh|*/mind-loop.sh|*\\mind-loop.sh) has_script=1 ;;
     esac
     if [ "${arg}" = "${mind_name}" ]; then
       has_mind=1
