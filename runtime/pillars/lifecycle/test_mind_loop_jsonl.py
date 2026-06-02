@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -308,6 +309,132 @@ class TestMindLoopNudge(unittest.TestCase):
             self.nudge_file.exists(),
             "stale nudge file should be cleaned at next cycle start"
         )
+
+
+@unittest.skipUnless(_bash_available(), "bash not available in PATH")
+class TestMindLoopPeekInbox(unittest.TestCase):
+    """Fix #144 case A: mind-loop が claude -p 起動前に inbox を peek して
+    prompt 冒頭に dispatch 概要を挿入する。
+
+    stub claude を「prompt 引数を file に dump するだけ」のものに差し替え、
+    実機 inbox 状態に応じて prompt が変化することを assertion する。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        # config.env を空で作って host setup 済扱い (mind-loop は他の項目を
+        # 必要としないので空でも問題ない)。
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        # stub claude: 引数 "-p" の次の文字列を /tmp/last-prompt に dump する。
+        # POSIX bash で "$@" を file に出すだけのシンプルなものでよい。
+        self.prompt_dump = self.tmp / "last-prompt.txt"
+        self.stub_bin = self.tmp / "stub-claude"
+        self.stub_bin.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "$@" > "{self.prompt_dump.as_posix()}"\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        self.stub_bin.chmod(0o755)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run_loop(self, max_cycles: int = 1, period: int = 0) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(self.stub_bin)
+        env["AI_ORG_OS_LOOP_PERIOD"] = str(period)
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = str(max_cycles)
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def _send_dispatch_to_alice(self, from_mind: str, topic: str, body: str) -> None:
+        """Nexus を直接使って alice の inbox に dispatch を投入する。
+        bash 経由ではなく Python で行うことで、テスト時間を最小化する。"""
+        conduit_dir = MIND_LOOP_SH.parent.parent / "conduit"
+        # 一時的に sys.path 注入して storage import
+        original = list(sys.path)
+        sys.path.insert(0, str(conduit_dir))
+        try:
+            from storage import Nexus  # noqa: PLC0415
+
+            nx = Nexus(
+                storage_dir=self.home / "conduit-storage",
+                logs_dir=self.home / "logs",
+                minds_dir=self.home / "minds",
+            )
+            nx.send_dispatch(
+                from_mind=from_mind, to_mind="alice",
+                topic=topic, body=body,
+            )
+        finally:
+            sys.path = original
+
+    def test_empty_inbox_prompt_unchanged(self) -> None:
+        """inbox 空のときは prompt に INBOX 句が挿入されない (= 既存挙動と互換)。"""
+        result = self._run_loop(max_cycles=1)
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        prompt = self.prompt_dump.read_text(encoding="utf-8")
+        self.assertIn("cycle 1 for mind alice", prompt)
+        self.assertNotIn("INBOX:", prompt)
+
+    def test_inbox_with_dispatch_injects_summary(self) -> None:
+        """inbox に dispatch があれば prompt に「N pending dispatch(es): from X 'topic'」
+        が挿入される。"""
+        self._send_dispatch_to_alice(
+            from_mind="gm-default",
+            topic="Issue ready — start designing",
+            body="please design X",
+        )
+        result = self._run_loop(max_cycles=1)
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        prompt = self.prompt_dump.read_text(encoding="utf-8")
+        self.assertIn("INBOX: 1 pending dispatch(es)", prompt)
+        self.assertIn("from gm-default", prompt)
+        self.assertIn("Issue ready — start designing", prompt)
+
+    def test_multiple_dispatches_summary(self) -> None:
+        """複数 dispatch があれば全部 summary に並ぶ (5 件まで)。"""
+        for i in range(3):
+            self._send_dispatch_to_alice(
+                from_mind=f"sender-{i}", topic=f"topic-{i}", body="b",
+            )
+        result = self._run_loop(max_cycles=1)
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        prompt = self.prompt_dump.read_text(encoding="utf-8")
+        self.assertIn("3 pending dispatch(es)", prompt)
+        self.assertIn("topic-0", prompt)
+        self.assertIn("topic-1", prompt)
+        self.assertIn("topic-2", prompt)
+
+    def test_summary_capped_at_5(self) -> None:
+        """6 件以上の dispatch は最初 5 件 + '(+N more)' 表記。"""
+        for i in range(7):
+            self._send_dispatch_to_alice(
+                from_mind=f"s{i:02d}", topic=f"t{i:02d}", body="b",
+            )
+        result = self._run_loop(max_cycles=1)
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        prompt = self.prompt_dump.read_text(encoding="utf-8")
+        self.assertIn("7 pending dispatch(es)", prompt)
+        # 先頭 5 件は含まれる
+        self.assertIn("t00", prompt)
+        self.assertIn("t04", prompt)
+        # +2 more
+        self.assertIn("(+2 more)", prompt)
 
 
 if __name__ == "__main__":
