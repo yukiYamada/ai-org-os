@@ -105,6 +105,19 @@ LOG_FILE="${MIND_DIR}/mind-loop.log"
 # (Windows MSYS bash でも file I/O は確実に動く) で副作用も小さい。
 NUDGE_FILE="${MIND_DIR}/.mind-loop.nudge"
 
+# Phase 5f Step 2 / Fix #144 (case A): cycle 内 inbox re-peek 用の Python 実行点。
+# claude -p 起動の直前に inbox を peek し、未読 dispatch があれば prompt 冒頭に
+# 概要を挿入する → claude が「empty cycle 判定」で早期 exit する時間を短縮し、
+# 既存 dispatch の処理優先度を上げる。
+# config.env が無い (= host setup 未実施) 場合は python3 にフォールバック。
+CONFIG_ENV="${RUNTIME_HOME}/config.env"
+if [ -r "${CONFIG_ENV}" ]; then
+  # shellcheck disable=SC1090
+  . "${CONFIG_ENV}"
+fi
+PEEK_PYTHON_BIN="${HOST_PYTHON_BIN:-${AI_ORG_OS_PYTHON:-python3}}"
+CONDUIT_DIR="${RUNTIME_DIR}/pillars/conduit"
+
 if [ ! -d "${MIND_DIR}" ]; then
   echo "[ERROR] Mind '${MIND_NAME}' does not exist (looked for ${MIND_DIR})" >&2
   echo "[HINT] Spawn it first: ${SCRIPT_DIR}/spawn-mind.sh <kind> <persona> ${MIND_NAME}" >&2
@@ -234,6 +247,18 @@ _mindloop_iso_ms() {
   printf '%s' "${ts}"
 }
 
+# Fix #144 case A: inbox を peek して 1 行サマリを stdout に返す。
+# 失敗系 (Nexus import error / Python 不在 / read エラー) は silent skip
+# (stdout 空文字)。F3 準拠: peek 失敗は cycle 進行を止めない。Mind 名は
+# script 起動時に validate 済なので argv 経由で安全に渡せる。
+# 実装は runtime/pillars/conduit/peek_inbox.py を呼ぶ standalone CLI 経由
+# (MSYS bash の path translation を確実に動かすため、`python -c` インライン
+# 方式ではなく argv 渡しを使う)。
+_mindloop_peek_inbox() {
+  local mind_name="$1"
+  "${PEEK_PYTHON_BIN}" "${CONDUIT_DIR}/peek_inbox.py" "${mind_name}" 2>/dev/null || true
+}
+
 # Usage: _mindloop_emit_event <event_name> [<extra_json_fields>]
 # extra は leading comma 付きの JSON フラグメント
 # (例: ',"cycle":1,"pid":12345')。空なら拡張 field なし。
@@ -292,6 +317,16 @@ while :; do
   # 本実装の主目的は「ループが回ること」「停止できること」「ログが残ること」の検証。
   # Persona / inbox 状況を取り込む高度なプロンプト組み立ては #41 後続の改善で対応。
   PROMPT="cycle ${CYCLE} for mind ${MIND_NAME}. Check inbox via Nexus and act per your Persona."
+
+  # Fix #144 case A: claude 起動直前に inbox 状況を peek し、prompt 冒頭に概要を
+  # 挿入する。claude は依然として read_inbox MCP tool で全文を読むが、ここで
+  # 「empty / non-empty」を示しておくと cycle 1 で空 inbox に対する確認時間と、
+  # cycle 2+ で「あなた宛 dispatch が既に届いている」の signal を明示化できる。
+  # peek 失敗 (= python 不在 / Nexus 故障) は silent fallback (= 既存 prompt のまま)。
+  PEEK_SUMMARY="$(_mindloop_peek_inbox "${MIND_NAME}")"
+  if [ -n "${PEEK_SUMMARY}" ]; then
+    PROMPT="cycle ${CYCLE} for mind ${MIND_NAME}. INBOX: ${PEEK_SUMMARY}. Check inbox via Nexus and act per your Persona."
+  fi
 
   # claude をブロッキング呼び出し。標準出力 / エラーをログに混ぜる。
   # CLAUDE.md (Persona) と .mcp.json (Nexus) は Mindspace 内に置かれているので、
