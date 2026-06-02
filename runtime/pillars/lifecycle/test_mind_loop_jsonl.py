@@ -175,5 +175,140 @@ class TestMindLoopJsonl(unittest.TestCase):
         self.assertLessEqual(start_ts, end_ts)
 
 
+@unittest.skipUnless(_bash_available(), "bash not available in PATH")
+class TestMindLoopNudge(unittest.TestCase):
+    """Fix #136: mind-loop.sh の sleep loop が .mind-loop.nudge を見て即時抜ける。
+
+    本クラスは長い period (= 10s) で loop を background 起動し、別 thread で
+    nudge file を touch し、cycle 2 開始時刻が period より大きく早いことを
+    assertion する。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        self.nudge_file = self.mind_dir / ".mind-loop.nudge"
+        # stub claude: exit 0 even faster than the default stub
+        self.stub_bin = self.tmp / "stub-claude"
+        self.stub_bin.write_text(
+            "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+        )
+        self.stub_bin.chmod(0o755)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _read_events(self) -> list[dict]:
+        if not self.event_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.event_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def test_nudge_shortens_sleep_between_cycles(self) -> None:
+        """cycle 1 終了後の sleep (period=10s) を nudge で 1-2s 程度に短縮する。
+
+        max_cycles=2 で 2 cycle 走る。cycle 1 → cycle 2 の間に nudge file を
+        touch すると sleep が即時抜ける。cycle 2 の start.ts - cycle 1 の end.ts
+        が period (10s) より小さくなることを assertion。
+        """
+        import threading
+        import time as _time
+
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(self.stub_bin)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "10"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = "2"
+
+        # subprocess.Popen で非同期起動、別 thread で nudge を打つ
+        proc = subprocess.Popen(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        def _nudge_after_cycle1_ends() -> None:
+            # cycle 1 の mind_loop.end event が現れるまで poll、その後 nudge を touch
+            deadline = _time.time() + 90  # Windows bash 想定で余裕を持って 90s
+            while _time.time() < deadline:
+                evts = self._read_events()
+                ended = [e for e in evts if e["event"] == "mind_loop.end" and e["cycle"] == 1]
+                if ended:
+                    # cycle 1 が終わった直後に nudge を打つ
+                    self.nudge_file.touch()
+                    return
+                _time.sleep(0.2)
+
+        nudger = threading.Thread(target=_nudge_after_cycle1_ends, daemon=True)
+        nudger.start()
+
+        try:
+            proc.wait(timeout=180)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            nudger.join(timeout=5)
+
+        self.assertEqual(proc.returncode, 0, f"loop failed:\n{proc.stderr.read() if proc.stderr else ''}")
+        events = self._read_events()
+        starts = sorted([e for e in events if e["event"] == "mind_loop.start"], key=lambda e: e["cycle"])
+        ends = sorted([e for e in events if e["event"] == "mind_loop.end"], key=lambda e: e["cycle"])
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(len(ends), 2)
+
+        # cycle 1 end → cycle 2 start の sleep を測る
+        from datetime import datetime as _dt
+        def _parse(ts: str) -> _dt:
+            return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+        gap_s = (_parse(starts[1]["ts"]) - _parse(ends[0]["ts"])).total_seconds()
+        # period=10s だが nudge で短縮されているはず。bash の 1s 刻み polling と
+        # OS scheduling を考慮して 5s 未満を期待 (= 半分以下を実証)。
+        self.assertLess(
+            gap_s, 5.0,
+            f"nudge should shorten sleep to < 5s but observed {gap_s:.2f}s gap"
+        )
+
+    def test_stale_nudge_is_cleaned_at_cycle_start(self) -> None:
+        """前 cycle 終了直後に到着した nudge が次 cycle 開始時に削除される。
+
+        max_cycles=1 で 1 cycle 走る前に nudge を仕込む → cycle 開始時の
+        rm -f で消える → cycle 終了後にも file は無い。
+        """
+        # nudge を pre-touch
+        self.nudge_file.touch()
+        self.assertTrue(self.nudge_file.exists())
+
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(self.stub_bin)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = "1"
+
+        result = subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        # cycle 完走後、nudge は消えているはず (cycle 開始時に rm -f された)
+        self.assertFalse(
+            self.nudge_file.exists(),
+            "stale nudge file should be cleaned at next cycle start"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

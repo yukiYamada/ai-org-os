@@ -32,6 +32,19 @@ def _default_storage_dir() -> Path:
     return Path(home) / ".ai-org-os" / "conduit-storage"
 
 
+def _default_minds_dir() -> Path:
+    """$AI_ORG_OS_HOME/minds/ (ADR-0018)。
+
+    Fix #136: send_dispatch から recipient の .mind-loop.nudge を touch するのに
+    必要。logs_dir / storage_dir と同じく関数化で env override をテスト容易に。
+    """
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        return Path(env) / "minds"
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return Path(home) / ".ai-org-os" / "minds"
+
+
 # 旧コードからの参照のため module-level エイリアスは残すが、関数で解決する。
 DEFAULT_STORAGE_DIR = _default_storage_dir()
 
@@ -113,6 +126,7 @@ class Nexus:
         storage_dir: Path | str | None = None,
         identity: str | None = None,
         logs_dir: Path | str | None = None,
+        minds_dir: Path | str | None = None,
     ) -> None:
         base = Path(storage_dir) if storage_dir is not None else _default_storage_dir()
         self.storage_dir = base.resolve()
@@ -122,6 +136,10 @@ class Nexus:
         # $AI_ORG_OS_HOME/logs/ にフォールバック。テストは tmp dir を渡す。
         logs_base = Path(logs_dir) if logs_dir is not None else _default_logs_dir()
         self.logs_dir = logs_base.resolve()
+        # Fix #136: send_dispatch 経路で recipient Mindspace の nudge file を
+        # touch するために minds_dir を保持。テストは tmp dir を渡す。
+        minds_base = Path(minds_dir) if minds_dir is not None else _default_minds_dir()
+        self.minds_dir = minds_base.resolve()
         # When identity is provided, validate its shape so it cannot be a path traversal etc.
         if identity is not None:
             _validate_mind_name(identity, "identity")
@@ -212,6 +230,22 @@ class Nexus:
             topic=topic,
             msg_id=msg_id,
         )
+        # Fix #136: recipient mind-loop.sh の sleep を即時抜けさせる nudge。
+        # recipient の Mindspace が存在しない (= Mind 未 spawn / Warden / kill 後)
+        # 場合は silent skip。失敗系は全て例外を吐かない (F3-like) — dispatch 本体
+        # は既に永続化されており、nudge は best-effort な latency 改善でしかない。
+        # 安全性: to_mind は _validate_mind_name 通過後の値で path traversal 不可。
+        # 仮に recipient Mind が自 Mindspace を改竄しても影響は self-effect に限定。
+        try:
+            recipient_mindspace = self.minds_dir / to_mind
+            if recipient_mindspace.is_dir():
+                nudge_file = recipient_mindspace / ".mind-loop.nudge"
+                nudge_file.touch()
+        except OSError:
+            # nudge file の I/O 失敗は dispatch 成功を覆さない。stderr ログも不要
+            # (= operational noise を増やさない、polling fallback で 1 cycle 後に
+            #  処理される)。
+            pass
         return {
             "ok": True,
             "msg_id": msg_id,

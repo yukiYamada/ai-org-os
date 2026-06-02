@@ -99,6 +99,11 @@ MIND_DIR="${RUNTIME_HOME}/minds/${MIND_NAME}"
 LOCK_DIR="${MIND_DIR}/.mind-loop.lock"
 PID_FILE="${MIND_DIR}/.mind-loop.pid"
 LOG_FILE="${MIND_DIR}/mind-loop.log"
+# Phase 5f Step 2 / Fix #136: Nexus.send_dispatch が touch する sentinel ファイル。
+# sleep 中に存在を検出したら即時 break して次 cycle へ進む = dispatch 到着 latency
+# を cycle period (30s 等) から 1s 以下に短縮する。SIGUSR1 案より cross-platform
+# (Windows MSYS bash でも file I/O は確実に動く) で副作用も小さい。
+NUDGE_FILE="${MIND_DIR}/.mind-loop.nudge"
 
 if [ ! -d "${MIND_DIR}" ]; then
   echo "[ERROR] Mind '${MIND_NAME}' does not exist (looked for ${MIND_DIR})" >&2
@@ -269,6 +274,14 @@ echo "[mind-loop] pid=$$ pidfile=${PID_FILE}" | tee -a "${LOG_FILE}"
 
 while :; do
   CYCLE=$((CYCLE + 1))
+  # Fix #136: cycle 開始時に nudge file を consume。前 cycle で sleep loop が
+  # nudge を検知して break した場合、ここで file を消すことで「同じ nudge が
+  # 次 sleep でも検知される (= 無限 burst)」を防ぐ。cycle body 中に到着した
+  # nudge は **直後の sleep loop で検知され break → cycle 開始 → ここで消費**
+  # の流れになるので timing race は無い (= 消費は cycle 単位、message 単位
+  # ではない点に注意: 1 cycle で複数の dispatch が処理されることがある)。
+  rm -f "${NUDGE_FILE}" 2>/dev/null || true
+
   STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   START_EPOCH="$(date -u +%s)"
   echo "[mind-loop][cycle ${CYCLE}] start ${STARTED_AT}" >> "${LOG_FILE}"
@@ -311,12 +324,18 @@ while :; do
 
   # sleep を 1 秒刻みで分割し、signal 受信時に即時抜けられるようにする。
   # 単一の `sleep ${PERIOD}` だと SIGTERM 後に次 cycle 突入してから止まる挙動になる。
+  # Fix #136: nudge file 検出時も break して dispatch 到着への応答 latency を短縮。
   if [ "${PERIOD}" -gt 0 ]; then
     SLEPT=0
     while [ "${SLEPT}" -lt "${PERIOD}" ]; do
       sleep 1
       SLEPT=$((SLEPT + 1))
       if [ "${RECEIVED_STOP}" = "1" ]; then
+        break
+      fi
+      # Fix #136: dispatch 到着で nudge file が touch されたら sleep を抜ける。
+      # nudge は次 cycle 開始時に削除されるので、ここでは存在だけ確認 (read-only)。
+      if [ -e "${NUDGE_FILE}" ]; then
         break
       fi
     done
