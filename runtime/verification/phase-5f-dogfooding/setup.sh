@@ -70,8 +70,13 @@ Subcommands:
           --start-loops  : 4 Mind の mind-loop.sh を background で起動
   status
         4 Mind の登録状況、observe.py --realm、observe.py --trace --since 1h を出す。
-  cleanup
+  cleanup [--no-preserve]
         4 Mind を kill-mind.sh で消去。
+          (default)        : 消去前に Mindspace を \$AI_ORG_OS_HOME/dogfooding-snapshots/
+                             <timestamp>/<mind>/ にコピー (= notes/, state.md,
+                             mind-loop.log, implementer 成果物 等を forensics 用に保存)
+          --no-preserve    : preserve せず直接消す (高速、Issue #134 RCA でいう
+                             "notes/ preservation" を skip)
 
 Spawn される Mind:
   alice       persona=designer
@@ -191,9 +196,49 @@ cmd_status() {
 }
 
 cmd_cleanup() {
+  local preserve=1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-preserve) preserve=0; shift ;;
+      --preserve)    preserve=1; shift ;;  # explicit (currently the default)
+      *) echo "[ERROR] unknown cleanup option: $1" >&2; usage >&2; exit 1 ;;
+    esac
+  done
+
+  local runtime_home="${AI_ORG_OS_HOME:-${HOME}/.ai-org-os}"
+  local snapshot_dir=""
+  if [ "${preserve}" -eq 1 ]; then
+    # Issue #134 RCA top recommendation: cleanup 前に Mindspace を退避して
+    # cycle 内行動 (notes/, state.md, mind-loop.log, implementer 成果物 等) を
+    # forensics 用に保存する。snapshot は ${AI_ORG_OS_HOME}/dogfooding-snapshots/
+    # 配下 — runtime state (ADR-0018) の subset。
+    local ts
+    ts="$(date -u +"%Y%m%dT%H%M%SZ")"
+    snapshot_dir="${runtime_home}/dogfooding-snapshots/${ts}"
+    mkdir -p "${snapshot_dir}" 2>/dev/null || {
+      echo "[WARN] failed to mkdir ${snapshot_dir}, skipping preserve" >&2
+      preserve=0
+    }
+  fi
+
   echo "=== cleaning up 4 Minds ==="
+  if [ "${preserve}" -eq 1 ]; then
+    echo "  preserve -> ${snapshot_dir}"
+  fi
   for name in "${MIND_NAMES[@]}"; do
     echo
+    local mindspace="${runtime_home}/minds/${name}"
+    if [ "${preserve}" -eq 1 ] && [ -d "${mindspace}" ]; then
+      # cp -r で Mindspace 全体を保存。.mind-loop.pid 等の runtime metadata も
+      # 含めるが、disk は安いし forensic context として有用。失敗は WARN のみ
+      # (= cleanup 本体は止めない、F3-like)。
+      local mind_snapshot="${snapshot_dir}/${name}"
+      if cp -r "${mindspace}" "${mind_snapshot}" 2>/dev/null; then
+        echo "[preserve] ${name} -> ${mind_snapshot}"
+      else
+        echo "[preserve] WARN: copy ${name} -> ${mind_snapshot} failed" >&2
+      fi
+    fi
     echo "[kill] ${name}"
     # kill-mind.sh は非存在 Mind に対して exit 非 0 を返す可能性があるため
     # || true で continue。verbose に何が起きたかは kill-mind 側の出力に任せる。
@@ -201,6 +246,10 @@ cmd_cleanup() {
   done
   echo
   echo "[done] cleanup completed (some skips are OK if a Mind was already gone)"
+  if [ "${preserve}" -eq 1 ] && [ -n "${snapshot_dir}" ] && [ -d "${snapshot_dir}" ]; then
+    echo "[preserve] snapshot dir: ${snapshot_dir}"
+    echo "[preserve] inspect: ls ${snapshot_dir}"
+  fi
 }
 
 # ----- main -----
@@ -216,7 +265,7 @@ shift
 case "${subcmd}" in
   setup)   cmd_setup "$@" ;;
   status)  cmd_status ;;
-  cleanup) cmd_cleanup ;;
+  cleanup) cmd_cleanup "$@" ;;
   -h|--help) usage ;;
   *) echo "[ERROR] unknown subcommand: ${subcmd}" >&2; usage >&2; exit 1 ;;
 esac
