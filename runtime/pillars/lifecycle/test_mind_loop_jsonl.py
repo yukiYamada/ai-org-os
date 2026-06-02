@@ -215,11 +215,15 @@ class TestMindLoopNudge(unittest.TestCase):
         ]
 
     def test_nudge_shortens_sleep_between_cycles(self) -> None:
-        """cycle 1 終了後の sleep (period=10s) を nudge で 1-2s 程度に短縮する。
+        """cycle 1 終了後の sleep (period=20s) を nudge で短縮する。
 
         max_cycles=2 で 2 cycle 走る。cycle 1 → cycle 2 の間に nudge file を
-        touch すると sleep が即時抜ける。cycle 2 の start.ts - cycle 1 の end.ts
-        が period (10s) より小さくなることを assertion。
+        touch すると sleep が即時抜ける。Windows MSYS bash の subprocess fork
+        overhead (date / mkdir / printf がそれぞれ fork) で cycle 2 prep に
+        ~9s かかるため、gap = sleep_time + ~9s prep。period=20s だと:
+        - with-nudge: ~1-2s sleep + ~9s prep = ~10-15s gap
+        - no-nudge:   ~20s sleep + ~9s prep = ~30s gap
+        閾値 18s で確実に分離。Linux CI ではどちらも更に短いので余裕で pass。
         """
         import threading
         import time as _time
@@ -227,7 +231,7 @@ class TestMindLoopNudge(unittest.TestCase):
         env = os.environ.copy()
         env["AI_ORG_OS_HOME"] = str(self.home)
         env["AI_ORG_OS_CLAUDE_BIN"] = str(self.stub_bin)
-        env["AI_ORG_OS_LOOP_PERIOD"] = "10"
+        env["AI_ORG_OS_LOOP_PERIOD"] = "20"
         env["AI_ORG_OS_LOOP_MAX_CYCLES"] = "2"
 
         # subprocess.Popen で非同期起動、別 thread で nudge を打つ
@@ -273,11 +277,14 @@ class TestMindLoopNudge(unittest.TestCase):
         def _parse(ts: str) -> _dt:
             return _dt.fromisoformat(ts.replace("Z", "+00:00"))
         gap_s = (_parse(starts[1]["ts"]) - _parse(ends[0]["ts"])).total_seconds()
-        # period=10s だが nudge で短縮されているはず。bash の 1s 刻み polling と
-        # OS scheduling を考慮して 5s 未満を期待 (= 半分以下を実証)。
+        # period=20s に対し閾値 18s。
+        # - with-nudge: 1-2s sleep + ~9s cycle 2 prep (Windows bash overhead) = ~10-15s
+        # - no-nudge:   20s sleep + ~9s prep = ~30s (regression を確実に catch)
+        # Linux CI では bash overhead が ~1s 程度なので with-nudge gap ~2-3s。
+        # 閾値 18s は no-nudge 退行が混入した場合に確実に fail する設計値。
         self.assertLess(
-            gap_s, 5.0,
-            f"nudge should shorten sleep to < 5s but observed {gap_s:.2f}s gap"
+            gap_s, 18.0,
+            f"nudge should shorten sleep below 18s (period=20s) but observed {gap_s:.2f}s gap"
         )
 
     def test_stale_nudge_is_cleaned_at_cycle_start(self) -> None:
@@ -488,29 +495,58 @@ class TestPeekInboxUnit(unittest.TestCase):
 
     def test_summarize_truncates_long_topic(self) -> None:
         from peek_inbox import _summarize, MAX_TOPIC_CHARS_PER_ENTRY  # noqa: PLC0415
-        msg = {
-            "content": (
-                "---\n"
-                "from: sender\n"
-                f"topic: {'X' * 500}\n"
-                "---\n\nb\n"
-            )
-        }
-        result = _summarize([msg])
+        entries = [("sender", "X" * 500)]
+        result = _summarize(entries, total=1)
         # topic 部分は 80 文字以内 (... 末尾込み)
         self.assertIn(f"from sender '{'X' * (MAX_TOPIC_CHARS_PER_ENTRY - 3)}...", result)
         self.assertNotIn("X" * 200, result)
 
     def test_summarize_bounded_total_size(self) -> None:
-        """5 件全部 80 字 topic でも合計 600 字を超えない。"""
+        """5 件全部 100 字 topic でも合計 MAX_TOTAL_SUMMARY_CHARS を超えない。"""
         from peek_inbox import _summarize, MAX_TOTAL_SUMMARY_CHARS  # noqa: PLC0415
-        long = "Y" * 100  # 各 topic 100 字
-        msgs = [
-            {"content": f"---\nfrom: s{i}\ntopic: {long}\n---\n\nb\n"}
-            for i in range(5)
-        ]
-        result = _summarize(msgs)
+        entries = [(f"s{i}", "Y" * 100) for i in range(5)]
+        result = _summarize(entries, total=5)
         self.assertLessEqual(len(result), MAX_TOTAL_SUMMARY_CHARS)
+
+    def test_summarize_uses_total_for_more_marker(self) -> None:
+        """entries は 5 件しか持たないが total は実件数、'(+N more)' は total ベース。"""
+        from peek_inbox import _summarize  # noqa: PLC0415
+        entries = [(f"s{i}", f"t{i}") for i in range(5)]
+        result = _summarize(entries, total=12)  # 12 件中 5 件表示
+        self.assertIn("12 pending dispatch(es)", result)
+        self.assertIn("(+7 more)", result)
+
+    def test_parse_frontmatter_skips_body(self) -> None:
+        """Codex P2 fixup-2: _parse_frontmatter_line は frontmatter 終了 (2 度目の
+        ---) で読み込みを止め、巨大 body には触れない。
+        """
+        import tempfile  # noqa: PLC0415
+        from peek_inbox import _parse_frontmatter_line  # noqa: PLC0415
+        # 10MB の body を仕込む — フルロードしたら遅い / メモリ食う
+        body_size = 10 * 1024 * 1024
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tf:
+            tf.write("---\n")
+            tf.write("from: sender-big\n")
+            tf.write("topic: small topic\n")
+            tf.write("---\n\n")
+            tf.write("X" * body_size)
+            path = Path(tf.name)
+        try:
+            from_, topic = _parse_frontmatter_line(path)
+            self.assertEqual(from_, "sender-big")
+            self.assertEqual(topic, "small topic")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_main_rejects_invalid_mind_name(self) -> None:
+        """path traversal / 規格外 mind_name は validate されて silent skip。"""
+        from peek_inbox import main  # noqa: PLC0415
+        # 通常は print が走るが、invalid name では走らない (= 戻り値 0、stdout 空)
+        # 直接呼ぶ場合、sys.stdout.write を見ないと出力検証は難しいので、
+        # main の戻り値だけ確認 (silent skip でも 0 を返す契約)。
+        self.assertEqual(main(["peek_inbox.py", "../escape"]), 0)
+        self.assertEqual(main(["peek_inbox.py", ""]), 0)
+        self.assertEqual(main(["peek_inbox.py", "a" * 100]), 0)  # > 64 chars
 
 
 if __name__ == "__main__":

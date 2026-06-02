@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Brief inbox peek for mind-loop.sh integration (Fix #144 case A).
+r"""Brief inbox peek for mind-loop.sh integration (Fix #144 case A).
 
 Usage:
     python peek_inbox.py <mind_name>
@@ -19,11 +19,17 @@ Standalone CLI として分離した理由: bash の `python -c "..."` インラ
 MSYS bash の path translation (`/c/...` → `C:\...`) が argv 経由でないと働かず、
 Windows ネイティブ python.exe が import path を解釈できない。本ファイルを
 独立 script にすれば、`__file__` ベースの sys.path 解決が確実に動く。
+
+I/O bound (Codex P2 PR #145 fixup-2): per-cycle 呼び出しなので、`Nexus.read_inbox`
+で **全 inbox file を full body 読み込む** のはサイズ blowup でコスト爆発する
+(send_dispatch は body size を制限していない)。本 script は dir glob で
+先頭 5 件だけ frontmatter のみを読む fast path を実装する。
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -38,10 +44,6 @@ if hasattr(sys.stdout, "reconfigure"):
     except (ValueError, AttributeError):
         pass
 
-# storage.py は同じディレクトリ内。__file__ ベースで解決すれば
-# MSYS/Windows path 変換に影響されない。
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 
 # Codex P2 (PR #145): claude -p に渡る argv 長を抑える。Windows
 # CreateProcess の上限は ~32K、cmd.exe 経由だと ~8K。send_dispatch は topic
@@ -50,6 +52,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 切り詰める (超過は ... + 件数だけ伝える)。
 MAX_TOPIC_CHARS_PER_ENTRY = 80
 MAX_TOTAL_SUMMARY_CHARS = 600
+SUMMARY_LIMIT = 5
+
+# storage.py の MIND_NAME_RE と同形 (二重防御として inline 化、
+# storage import を fast path 経由で回避するため依存しない)。
+_MIND_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -63,27 +70,83 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 3] + "..."
 
 
-def _summarize(messages: list[dict]) -> str:
-    """messages → 1 行サマリ。先頭 5 件まで、超過分は `(+N more)` で表記。
-    Codex P2 (PR #145): topic / 合計長を切り詰めて argv length blowup を防ぐ。
+def _inbox_dir(mind_name: str) -> Path:
+    """$AI_ORG_OS_HOME/conduit-storage/inbox/<mind_name>/ を返す (ADR-0018)。"""
+    env = os.environ.get("AI_ORG_OS_HOME")
+    if env:
+        base = Path(env) / "conduit-storage"
+    else:
+        h = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+        base = Path(h) / ".ai-org-os" / "conduit-storage"
+    return base / "inbox" / mind_name
+
+
+def _parse_frontmatter_line(path: Path) -> tuple[str | None, str | None]:
+    """先頭から frontmatter のみを line-by-line 読み、from / topic を抽出する。
+    body は **読み込まない** (Codex P2 PR #145 fixup-2: body サイズ blowup
+    対策)。
+    """
+    from_ = topic = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fp:
+            in_fm = False
+            for line in fp:
+                line = line.rstrip("\r\n")
+                if line == "---":
+                    if not in_fm:
+                        in_fm = True
+                        continue
+                    # 2 度目の `---` で frontmatter 終了 → body には触れず break
+                    break
+                if not in_fm:
+                    # frontmatter 開始前に空行 / 他のテキストは無視
+                    continue
+                if line.startswith("from:") and from_ is None:
+                    from_ = line.split(":", 1)[1].strip()
+                elif line.startswith("topic:") and topic is None:
+                    topic = line.split(":", 1)[1].strip()
+                if from_ and topic:
+                    break  # 2 fields 確定したら frontmatter の残りも読まない
+    except OSError:
+        pass
+    return from_, topic
+
+
+def _list_summaries(mind_name: str) -> tuple[list[tuple[str | None, str | None]], int]:
+    """inbox dir を glob して先頭 SUMMARY_LIMIT 件の frontmatter のみ取得する。
+
+    返り値: (entries, total_count)。entries は [(from, topic), ...] で先頭 5 件まで。
+
+    Codex P2 PR #145 fixup-2: 旧実装は Nexus.read_inbox 経由で全 file の body
+    を読み込んでいた。msg_id (= ファイル名) は時刻 prefix を含むので
+    `sorted(glob('*.md'))` が概ね送信順で並ぶ。先頭 5 件だけ frontmatter
+    line-by-line で読めば I/O は O(min(5, N) × frontmatter_size) に bounded。
+    """
+    inbox = _inbox_dir(mind_name)
+    if not inbox.is_dir():
+        return [], 0
+    try:
+        files = sorted(inbox.glob("*.md"))
+    except OSError:
+        return [], 0
+    total = len(files)
+    entries: list[tuple[str | None, str | None]] = []
+    for path in files[:SUMMARY_LIMIT]:
+        from_, topic = _parse_frontmatter_line(path)
+        entries.append((from_, topic))
+    return entries, total
+
+
+def _summarize(entries: list[tuple[str | None, str | None]], total: int) -> str:
+    """frontmatter entries → 1 行サマリ。total は全 inbox 件数、entries は先頭
+    SUMMARY_LIMIT 件のみ。Codex P2 PR #145: topic / 合計長を切り詰める。
     """
     summaries: list[str] = []
-    for m in messages[:5]:
-        content = m.get("content", "")
-        from_ = topic = None
-        for line in content.split("\n"):
-            if line.startswith("from:") and from_ is None:
-                from_ = line.split(":", 1)[1].strip()
-            elif line.startswith("topic:") and topic is None:
-                topic = line.split(":", 1)[1].strip()
-            if from_ and topic:
-                break
+    for from_, topic in entries:
         topic_clip = _truncate(topic or "", MAX_TOPIC_CHARS_PER_ENTRY)
         summaries.append(f"from {from_} '{topic_clip}'")
-    n = len(messages)
-    extra = f" (+{n - 5} more)" if n > 5 else ""
-    full = f"{n} pending dispatch(es): " + "; ".join(summaries) + extra
-    # 全体サイズ守る (1 件目巨大、5 件大量 等の合わせ技に備える safety net)
+    extra = f" (+{total - SUMMARY_LIMIT} more)" if total > SUMMARY_LIMIT else ""
+    full = f"{total} pending dispatch(es): " + "; ".join(summaries) + extra
     return _truncate(full, MAX_TOTAL_SUMMARY_CHARS)
 
 
@@ -91,21 +154,16 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return 0  # silent: 引数不足は何も出さずに終わる
     mind_name = argv[1]
-    try:
-        # 遅延 import: storage 取得に失敗してもプロセス自体は 0 で抜ける
-        from storage import Nexus  # noqa: PLC0415
-    except Exception:
+    # path traversal / 巨大 name の防御。storage の validate と同じ regex。
+    if not isinstance(mind_name, str) or not _MIND_NAME_RE.match(mind_name):
         return 0
     try:
-        nx = Nexus(identity=None)
-        result = nx.read_inbox(mind_name)
-        messages = result.get("messages", [])
-        if not messages:
+        entries, total = _list_summaries(mind_name)
+        if total == 0:
             return 0
-        print(_summarize(messages))
+        print(_summarize(entries, total))
     except Exception:
-        # Nexus.read_inbox の validate (= mind_name の regex 違反等) も含めて
-        # 全て silent skip。mind-loop は INBOX 句なしの既存 prompt にフォールバック。
+        # 全例外 silent skip。mind-loop は INBOX 句なしの既存 prompt にフォールバック。
         return 0
     return 0
 
