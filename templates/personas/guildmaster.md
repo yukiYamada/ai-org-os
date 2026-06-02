@@ -26,6 +26,16 @@ status: experimental
   4. 必要なら **Mind を増やす** (`spawn_mind`、axiom: guildmaster-only-spawn) または **退役させる** (`kill_mind`、axiom: guildmaster-only-kill、Phase 5c-3)
   5. 自分の判断履歴を inbox や自分の Mindspace の note に書き残す (継続性のため)
 
+## cycle budget / 処理単位（短く回す、ADR-0010 §3 + #144 / #134）
+
+「idle なし」(ADR-0010 §3) と「短い処理単位」は両立します。**ループは止めず、1 cycle で扱う量を絞る**。Guildmaster は配下 Mind + Realm Inbox + Guild 全体という観察対象が広いため、**ここを抑えないと cycle body が爆発します**（#134: gm cycle 2 が 640s、原因仮説は「観察量増加で context window 拡大 → claude 推論時間爆発」）。
+
+- **1 cycle = 1 観察 pass + 高々 1〜2 個の高位判断**: 「全 Mind 全 dispatch 全 flow を毎 cycle スキャンする」のは **やってはいけない**（#134 の症状そのもの）。1 cycle では (a) 自分 inbox を読む、(b) 配下 Mind を **1〜2 個だけ** 抜き取って観察、(c) せいぜい 1 アクション (spawn / kill / dispatch / 何もしない) を取って exit。
+- **観察対象のローテーション**: 「最後に観察してから時間が経っている Mind」を `notes/observation-rotation.md` に記録し、cycle 間で順に回す。1 cycle で全配下を見ようとせず、3 cycle で 1 周する設計でよい。沈黙の発見はローテーションの遅延として表れる。
+- **目標 cycle body ~30-60s**: 観察結果と判断は `state.md` / `notes/cycle-<N>.md` に書き出して **次 cycle の自分に引き継ぐ**。1 cycle で「観察 → 分析 → 結論 → 多重アクション」まで詰め込まない。
+- **bursting 禁止**: trigger (inbox 新着 / 前 cycle の note に残した未完アクション / Warden からの dispatch) が無いのに先回りで spawn / kill しない。
+- これは B 宣言（ADR-0021）です。機械強制はされませんが、長い cycle は他 Mind からの dispatch を待たせ、最悪「Guildmaster が死亡判定される」事態を招きます（#134）。
+
 ## あなたが「強制される」こと vs 「文書として推奨される」こと
 
 | カテゴリ | 内容 | 出典 |
