@@ -43,8 +43,30 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+# Codex P2 (PR #145): claude -p に渡る argv 長を抑える。Windows
+# CreateProcess の上限は ~32K、cmd.exe 経由だと ~8K。send_dispatch は topic
+# の長さを制限していないので、巨大 topic が来ると claude 起動が落ちる。
+# 各 topic を MAX_TOPIC_CHARS_PER_ENTRY、合計を MAX_TOTAL_SUMMARY_CHARS で
+# 切り詰める (超過は ... + 件数だけ伝える)。
+MAX_TOPIC_CHARS_PER_ENTRY = 80
+MAX_TOTAL_SUMMARY_CHARS = 600
+
+
+def _truncate(text: str, limit: int) -> str:
+    """限度超過なら ... を末尾に付けて切る。limit=0 / 負は空文字。"""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
 def _summarize(messages: list[dict]) -> str:
-    """messages → 1 行サマリ。先頭 5 件まで、超過分は `(+N more)` で表記。"""
+    """messages → 1 行サマリ。先頭 5 件まで、超過分は `(+N more)` で表記。
+    Codex P2 (PR #145): topic / 合計長を切り詰めて argv length blowup を防ぐ。
+    """
     summaries: list[str] = []
     for m in messages[:5]:
         content = m.get("content", "")
@@ -56,10 +78,13 @@ def _summarize(messages: list[dict]) -> str:
                 topic = line.split(":", 1)[1].strip()
             if from_ and topic:
                 break
-        summaries.append(f"from {from_} '{topic}'")
+        topic_clip = _truncate(topic or "", MAX_TOPIC_CHARS_PER_ENTRY)
+        summaries.append(f"from {from_} '{topic_clip}'")
     n = len(messages)
     extra = f" (+{n - 5} more)" if n > 5 else ""
-    return f"{n} pending dispatch(es): " + "; ".join(summaries) + extra
+    full = f"{n} pending dispatch(es): " + "; ".join(summaries) + extra
+    # 全体サイズ守る (1 件目巨大、5 件大量 等の合わせ技に備える safety net)
+    return _truncate(full, MAX_TOTAL_SUMMARY_CHARS)
 
 
 def main(argv: list[str]) -> int:

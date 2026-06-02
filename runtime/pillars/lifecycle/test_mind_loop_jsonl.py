@@ -436,6 +436,82 @@ class TestMindLoopPeekInbox(unittest.TestCase):
         # +2 more
         self.assertIn("(+2 more)", prompt)
 
+    def test_long_topic_is_truncated(self) -> None:
+        """Codex P2 (PR #145): 巨大 topic は argv length blowup 防止のため
+        切り詰められる。\`MAX_TOPIC_CHARS_PER_ENTRY=80\` に揃う。"""
+        long_topic = "X" * 500  # 80 字制限を大きく超える
+        self._send_dispatch_to_alice(
+            from_mind="sender", topic=long_topic, body="b",
+        )
+        result = self._run_loop(max_cycles=1)
+        self.assertEqual(result.returncode, 0, f"loop failed:\n{result.stderr}")
+        prompt = self.prompt_dump.read_text(encoding="utf-8")
+        self.assertIn("INBOX: 1 pending dispatch(es)", prompt)
+        # 500 字の "X" がそのまま流れていないこと
+        # (80 字制限なので "X" * 77 + "..." = 80 字)
+        self.assertNotIn("X" * 200, prompt)
+        # 切り詰め痕跡 "..." が現れる
+        self.assertIn("X...", prompt)
+
+
+class TestPeekInboxUnit(unittest.TestCase):
+    """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
+    bash subprocess を回さないので速い。
+    """
+
+    def setUp(self) -> None:
+        # peek_inbox.py を import するために conduit dir を sys.path に追加
+        conduit = Path(__file__).resolve().parent.parent / "conduit"
+        if str(conduit) not in sys.path:
+            sys.path.insert(0, str(conduit))
+
+    def test_truncate_below_limit_unchanged(self) -> None:
+        from peek_inbox import _truncate  # noqa: PLC0415
+        self.assertEqual(_truncate("hello", 10), "hello")
+
+    def test_truncate_above_limit_with_ellipsis(self) -> None:
+        from peek_inbox import _truncate  # noqa: PLC0415
+        # limit=8 → "abcde..." (5 + "...")
+        self.assertEqual(_truncate("abcdefghij", 8), "abcde...")
+        self.assertEqual(len(_truncate("abcdefghij", 8)), 8)
+
+    def test_truncate_zero_limit_returns_empty(self) -> None:
+        from peek_inbox import _truncate  # noqa: PLC0415
+        self.assertEqual(_truncate("x" * 100, 0), "")
+        self.assertEqual(_truncate("x" * 100, -1), "")
+
+    def test_truncate_limit_le_3_no_ellipsis(self) -> None:
+        """limit <= 3 では '...' すら入らないので素直に切る。"""
+        from peek_inbox import _truncate  # noqa: PLC0415
+        self.assertEqual(_truncate("hello", 3), "hel")
+        self.assertEqual(_truncate("hello", 1), "h")
+
+    def test_summarize_truncates_long_topic(self) -> None:
+        from peek_inbox import _summarize, MAX_TOPIC_CHARS_PER_ENTRY  # noqa: PLC0415
+        msg = {
+            "content": (
+                "---\n"
+                "from: sender\n"
+                f"topic: {'X' * 500}\n"
+                "---\n\nb\n"
+            )
+        }
+        result = _summarize([msg])
+        # topic 部分は 80 文字以内 (... 末尾込み)
+        self.assertIn(f"from sender '{'X' * (MAX_TOPIC_CHARS_PER_ENTRY - 3)}...", result)
+        self.assertNotIn("X" * 200, result)
+
+    def test_summarize_bounded_total_size(self) -> None:
+        """5 件全部 80 字 topic でも合計 600 字を超えない。"""
+        from peek_inbox import _summarize, MAX_TOTAL_SUMMARY_CHARS  # noqa: PLC0415
+        long = "Y" * 100  # 各 topic 100 字
+        msgs = [
+            {"content": f"---\nfrom: s{i}\ntopic: {long}\n---\n\nb\n"}
+            for i in range(5)
+        ]
+        result = _summarize(msgs)
+        self.assertLessEqual(len(result), MAX_TOTAL_SUMMARY_CHARS)
+
 
 if __name__ == "__main__":
     unittest.main()
