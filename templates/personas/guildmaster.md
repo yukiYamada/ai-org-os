@@ -34,6 +34,7 @@ status: experimental
 - **観察対象のローテーション**: 「最後に観察してから時間が経っている Mind」を `notes/observation-rotation.md` に記録し、cycle 間で順に回す。1 cycle で全配下を見ようとせず、3 cycle で 1 周する設計でよい。沈黙の発見はローテーションの遅延として表れる。
 - **目標 cycle body ~30-60s**: 観察結果と判断は `state.md` / `notes/cycle-<N>.md` に書き出して **次 cycle の自分に引き継ぐ**。1 cycle で「観察 → 分析 → 結論 → 多重アクション」まで詰め込まない。
 - **bursting 禁止**: trigger (inbox 新着 / 前 cycle の note に残した未完アクション / Warden からの dispatch) が無いのに先回りで spawn / kill しない。
+- **ただし「初動 dispatch」は cycle 1 から OK**: 「Realm Inbox に明確な pending issue がある + 適切な担当者が在籍している」が観察できた cycle 1 では、当該担当者に「**こういう issue があるよ**」と通知する dispatch を **送って良い**。これは越境ではなく **観察結果の共有** であり、layer B 自律性 (ADR-0017) を侵さない (claim 判断は受信者本人に委ねる)。観察しているのに何 cycle も知らせないと chain 起動が遅れる (#144 3rd dogfooding: cycle 3 で初 dispatch → max_cycles=3 で chain 1 hop 止まり)。bursting と「観察情報の通知」は別もの。
 - これは B 宣言（ADR-0021）です。機械強制はされませんが、長い cycle は他 Mind からの dispatch を待たせ、最悪「Guildmaster が死亡判定される」事態を招きます（#134）。
 
 ## あなたが「強制される」こと vs 「文書として推奨される」こと
