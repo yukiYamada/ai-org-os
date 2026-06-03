@@ -61,13 +61,17 @@ GUILD=default
 
 usage() {
   cat <<USAGE
-Phase 5f Step 2 dogfooding kick-off helper.
+Phase 5f Step 2 / 3 dogfooding kick-off helper.
 
 Subcommands:
-  setup [--with-issue] [--start-loops]
+  setup [--with-issue] [--start-loops] [--pr-mode]
         4 Mind (alice/bob/gm-default/carol) を spawn。
           --with-issue   : テスト用 Issue を 1 件 Inbox に投入
           --start-loops  : 4 Mind の mind-loop.sh を background で起動
+          --pr-mode      : Step 3 用。bob (implementer) と carol (reviewer) を
+                           --workspace developer-default (= git worktree mode) で
+                           spawn する (ADR-0022 / 0027)。
+                           **\$AI_ORG_OS_TARGET_REPO env var 必須** (= 実 git repo path)。
   status
         4 Mind の登録状況、observe.py --realm、observe.py --trace --since 1h を出す。
   cleanup [--no-preserve]
@@ -83,6 +87,9 @@ Spawn される Mind:
   bob         persona=implementer
   gm-default  persona=guildmaster
   carol       persona=reviewer
+
+--pr-mode で bob / carol は \$AI_ORG_OS_TARGET_REPO/.git の git worktree に紐付き、
+実 PR 作成 → 人間 merge のフロー検証が可能になる (Phase 5f Step 3、ADR-0027)。
 USAGE
 }
 
@@ -91,10 +98,12 @@ USAGE
 cmd_setup() {
   local with_issue=0
   local start_loops=0
+  local pr_mode=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --with-issue)  with_issue=1; shift ;;
       --start-loops) start_loops=1; shift ;;
+      --pr-mode)     pr_mode=1; shift ;;
       *) echo "[ERROR] unknown setup option: $1" >&2; usage >&2; exit 1 ;;
     esac
   done
@@ -105,6 +114,21 @@ cmd_setup() {
     echo "[ERROR] host setup not done: ${runtime_home}/config.env not found" >&2
     echo "[HINT] Run host setup first: bash ${RUNTIME_DIR}/host/setup.sh" >&2
     exit 1
+  fi
+
+  # Step 3 / --pr-mode 前提 check: AI_ORG_OS_TARGET_REPO env var が必須。
+  # developer-default workspace (ADR-0022) は repo: $AI_ORG_OS_TARGET_REPO を
+  # 展開して target repo を解決する。実体が無いと spawn-mind が fail する。
+  if [ "${pr_mode}" -eq 1 ]; then
+    if [ -z "${AI_ORG_OS_TARGET_REPO:-}" ]; then
+      echo "[ERROR] --pr-mode requires AI_ORG_OS_TARGET_REPO env var (target git repo path)" >&2
+      echo "[HINT] export AI_ORG_OS_TARGET_REPO=/path/to/your/repo" >&2
+      exit 1
+    fi
+    if [ ! -d "${AI_ORG_OS_TARGET_REPO}/.git" ] && [ ! -f "${AI_ORG_OS_TARGET_REPO}/.git" ]; then
+      echo "[ERROR] AI_ORG_OS_TARGET_REPO=${AI_ORG_OS_TARGET_REPO} is not a git repo (.git not found)" >&2
+      exit 1
+    fi
   fi
 
   # 既存 Mind との衝突を事前 check (failures が部分的に起きるのを防ぐ)。
@@ -122,14 +146,28 @@ cmd_setup() {
     exit 1
   fi
 
-  echo "=== Phase 5f Step 2 dogfooding: spawning 4 Minds ==="
+  if [ "${pr_mode}" -eq 1 ]; then
+    echo "=== Phase 5f Step 3 dogfooding (--pr-mode): spawning 4 Minds ==="
+    echo "  target repo: ${AI_ORG_OS_TARGET_REPO}"
+    echo "  bob (implementer) と carol (reviewer) は workspace=developer-default で worktree 持つ"
+  else
+    echo "=== Phase 5f Step 2 dogfooding: spawning 4 Minds ==="
+  fi
   for i in "${!MIND_NAMES[@]}"; do
     local name="${MIND_NAMES[$i]}"
     local persona="${MIND_PERSONAS[$i]}"
+    # Step 3 / --pr-mode: 実 PR を出す implementer (bob) と、PR を観察する
+    # reviewer (carol) は developer-default に切り替え (= git worktree 取得)。
+    # alice (designer) / gm-default (guildmaster) は引き続き default で十分。
+    local workspace="default"
+    if [ "${pr_mode}" -eq 1 ] && { [ "${persona}" = "implementer" ] || [ "${persona}" = "reviewer" ]; }; then
+      workspace="developer-default"
+    fi
     echo
-    echo "[spawn] ${name}  kind=${KIND}  persona=${persona}  guild=${GUILD}"
+    echo "[spawn] ${name}  kind=${KIND}  persona=${persona}  guild=${GUILD}  workspace=${workspace}"
     "${LIFECYCLE_DIR}/spawn-mind.sh" \
       --guild "${GUILD}" \
+      --workspace "${workspace}" \
       "${KIND}" "${persona}" "${name}"
   done
 
@@ -168,13 +206,28 @@ reviewer (carol) が review し、guildmaster (gm-default) が全体を観察す
 3) cycle が進んだら時系列で流れを観察 (PR-E で merge した --trace):
    python ${OBSERVATION_DIR}/observe.py --trace --since 10m
 
-4) 不具合を見つけたら gh issue 起票 (Issue #124 の Step 2 観察観点を参照):
+4) 不具合を見つけたら gh issue 起票 (Issue #124 の Step 2/3 観察観点を参照):
    - 循環ループ / context drift / quota 枯渇 / その他
 
 5) 終わったら掃除:
    ./setup.sh cleanup
 
 NEXT
+
+  if [ "${pr_mode}" -eq 1 ]; then
+    cat <<PR_NEXT
+=== Step 3 観察観点 (--pr-mode、ADR-0027) ===
+
+- bob の Mindspace に worktree が貼られているか:
+    ls ${runtime_home}/minds/bob/work/ (= ${AI_ORG_OS_TARGET_REPO} の git worktree)
+- bob が \`git push -u origin mind/bob\` で自 branch を push できるか
+- bob が \`gh pr create\` で実 PR を出せるか → PR URL を carol 宛 dispatch に書くか
+- carol が \`gh pr view <url>\` で取得して review-comment 投稿か dispatch 返信を行うか
+- **誰も \`gh pr merge\` / \`git push -f\` を実行しないか** (ADR-0027 L1)
+- L3 (GitHub 側 branch protection) は operator が事前に main に設定推奨
+
+PR_NEXT
+  fi
 }
 
 cmd_status() {
