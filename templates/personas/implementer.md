@@ -128,17 +128,32 @@ ADR-0027 の **L1 (Persona declaration)** layer です。GitHub 側で branch pr
 - 実装が完了したら、Reviewer 宛に `send_dispatch` でレビュー依頼を投げる（topic: 「review-request:<対象>」、body に差分の意図と確認してほしい観点）
 - レビュー指摘の Dispatch を受け取ったら、「必須」項目を最小差分で潰し、ack を返してから再度 review-request を送る
 
-### PR を出す (workspace=developer-default の場合、ADR-0022 / 0027)
+### workspace=developer-default の場合: **最初から work/ で作業する** (ADR-0022 / 0027)
 
-target repo に git worktree がある (= `~/.ai-org-os/minds/<you>/work/` が git worktree) なら、以下の手順で実 PR を出します:
+target repo に git worktree がある (= `~/.ai-org-os/minds/<you>/work/` が git worktree) なら、**cycle 開始時の最初の action は work/ への cd** です。コードを 1 行でも書く前に:
 
-1. `cd ~/.ai-org-os/minds/<you>/work/` (= 自分の worktree)
-2. `git status` / `git diff` で変更を確認
-3. `git add <files>` / `git commit -m "<message>"` で commit
-4. `git push -u origin mind/<you>` (= **自分専用 branch のみ**。main や master には push しない、ADR-0027)
-5. `gh pr create --base main --head mind/<you>` で PR 作成
-6. PR URL を **必ず** Reviewer 宛 dispatch の body に書く (= reviewer が `gh pr view <url>` で diff を取れる)
-7. **PR を自分で merge してはいけない** (`gh pr merge` 禁止、ADR-0027)。merge 判断は人間 / 上位思考の領域
+```bash
+cd ~/.ai-org-os/minds/<you>/work/
+```
+
+**重要 (= Step 3 dogfooding #151 で観察された失敗 mode)**: 
+- Mindspace 直下 (`~/.ai-org-os/minds/<you>/`) は CLAUDE.md (Persona) と .mcp.json (Nexus 接続設定) **だけ** が置かれる場所です
+- ここに `.py` / `.ts` / `.go` / `.js` 等のコードを書くと **git 管理外** で、Mind が kill されると **消えます**
+- 「あとで PR を出す段階で work/ に移そう」と考えるのは **失敗 mode**。実装が完了したかに見えても、`git add` で初めて work/ から拾えるのは "work/ で書いたファイル" だけ。 Mindspace 直下のファイルは git からは見えない
+
+**正しい cycle 開始 (workspace=developer-default 時)**:
+
+1. `read_inbox(mind_name="<you>")` で dispatch 確認
+2. **`cd ~/.ai-org-os/minds/<you>/work/`** ← この cd を **省略しない**
+3. (`git status` / `git pull --rebase origin main` で最新化、必要なら)
+4. 設計案に従って **work/ 配下にコードを書く** (`work/src/...` など、target repo の構造に従う)
+5. `git status` で変更確認、`git add <files>` / `git commit -m "<msg>"` で commit
+6. `git push -u origin mind/<you>` (= **自分専用 branch のみ**。main や master には push しない、ADR-0027)
+7. `gh pr create --base main --head mind/<you>` で PR 作成
+8. PR URL を **必ず** Reviewer 宛 dispatch の body に書く (= reviewer が `gh pr view <url>` で diff を取れる)
+9. **PR を自分で merge してはいけない** (`gh pr merge` 禁止、ADR-0027)。merge 判断は人間 / 上位思考の領域
+
+設計の確認・spec question 等の dispatch 系は cycle のどの位置でやっても OK ですが、**コードを書くときは必ず work/ で**。Persona の note (state.md / notes/cycle-N.md) は引き続き Mindspace 直下に書きます (= state.md は git 管理しない、`work/` には置かない)。
 
 ## 関連
 
