@@ -174,12 +174,27 @@ cmd_setup() {
   if [ "${with_issue}" -eq 1 ]; then
     echo
     echo "=== submit test Issue ==="
-    "${INBOX_DIR}/submit-issue.sh" \
-      "Phase 5f Step 2 dogfooding test" \
-      "本 Issue は Step 2 の dogfooding 検証用。 \
+    if [ "${pr_mode}" -eq 1 ]; then
+      "${INBOX_DIR}/submit-issue.sh" \
+        "Phase 5f Step 3 dogfooding: 実 PR まで作る検証" \
+        "本 Issue は Step 3 の dogfooding 検証用 (#124, ADR-0027)。
+designer (alice) が設計案を出し、implementer (bob) が **target repo の \$AI_ORG_OS_TARGET_REPO/work/ 配下に小さな実装** を加え、
+git commit / push / **gh pr create で実 PR を作成**、reviewer (carol) が gh pr view で観察、
+guildmaster (gm-default) が全体を観察する。**人間が PR を merge する** までを 1 周検証する。
+
+成果物は **target repo の git worktree 内に置くコード** (= Mindspace 直下の markdown 設計はゴール外)。
+小さい題材で良い: 例えば runtime/pillars/conduit/utils.py に小さな pure helper を 1 つ追加、
+test も含めて 8-12 行程度。設計が複雑になりすぎたら scope を縮める。
+
+ADR-0027 信頼境界: bob/carol は git push --force / gh pr merge / 直接 main push / 等を実行しない。"
+    else
+      "${INBOX_DIR}/submit-issue.sh" \
+        "Phase 5f Step 2 dogfooding test" \
+        "本 Issue は Step 2 の dogfooding 検証用。 \
 designer (alice) が設計案を出し、implementer (bob) が小さなコード片を書き、 \
 reviewer (carol) が review し、guildmaster (gm-default) が全体を観察する \
 フローが 1 周回ることを目的とする。実 PR は不要。"
+    fi
   fi
 
   if [ "${start_loops}" -eq 1 ]; then
