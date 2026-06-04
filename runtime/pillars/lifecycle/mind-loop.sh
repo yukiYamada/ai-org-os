@@ -67,6 +67,13 @@ CYCLE_TIMEOUT="${AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT:-300}"
 # Mind が機能していないとみなす)。
 CYCLE_TIMEOUT_STREAK_MAX="${AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK:-3}"
 
+# Phase 5f Step 4.3 / ADR-0028 §2.2: cycle error streak (A axiom)。
+# timeout 以外の異常終了 (exit code != 0、claude API 529 / SDK crash / OS signal 等)
+# を観察。連続 streak max で notify-human signal を emit (operator が見にくる経路、
+# §2.3 で具体化)。timeout と違い auto-kill **しない** — error は再現性のある operator
+# 介入対象であり、自動 kill すると forensics が失われるため。
+CYCLE_ERROR_STREAK_MAX="${AI_ORG_OS_MIND_LOOP_ERROR_STREAK:-5}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --period)
@@ -103,6 +110,10 @@ if ! [[ "${CYCLE_TIMEOUT}" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "${CYCLE_TIMEOUT_STREAK_MAX}" =~ ^[0-9]+$ ]]; then
   echo "[ERROR] AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK must be non-negative integer (got '${CYCLE_TIMEOUT_STREAK_MAX}')" >&2
+  exit 1
+fi
+if ! [[ "${CYCLE_ERROR_STREAK_MAX}" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] AI_ORG_OS_MIND_LOOP_ERROR_STREAK must be non-negative integer (got '${CYCLE_ERROR_STREAK_MAX}')" >&2
   exit 1
 fi
 
@@ -391,11 +402,24 @@ while :; do
     fi
   fi
 
-  # streak 管理: 連続 timeout なら increment、成功なら reset。
+  # ADR-0028 §2.2: error 検出 (timeout 以外の non-zero exit)。
+  # claude が exit code 1 を返すケースも error として記録するが、Persona の判断
+  # ロジックに踏み込まない (= notify-human で operator に raise するのみ)。
+  IS_ERROR=0
+  if [ "${TIMED_OUT}" = "0" ] && [ "${RC}" != "0" ]; then
+    IS_ERROR=1
+  fi
+
+  # streak 管理: 連続 timeout なら increment、成功なら reset。error も同様に独立 streak。
   if [ "${TIMED_OUT}" = "1" ]; then
     CYCLE_TIMEOUT_STREAK=$((${CYCLE_TIMEOUT_STREAK:-0} + 1))
   else
     CYCLE_TIMEOUT_STREAK=0
+  fi
+  if [ "${IS_ERROR}" = "1" ]; then
+    CYCLE_ERROR_STREAK=$((${CYCLE_ERROR_STREAK:-0} + 1))
+  else
+    CYCLE_ERROR_STREAK=0
   fi
 
   echo "[mind-loop][cycle ${CYCLE}] end ${FINISHED_AT} exit=${RC}" >> "${LOG_FILE}"
@@ -404,6 +428,12 @@ while :; do
     # ADR-0028 §2.1: mind_loop.timeout event を追加で emit (= 通常 end の補足)。
     _mindloop_emit_event "mind_loop.timeout" \
       ",\"cycle\":${CYCLE},\"timeout_s\":${CYCLE_TIMEOUT},\"signal\":\"$([ "${RC}" = "137" ] && echo SIGKILL || echo SIGTERM)\",\"streak\":${CYCLE_TIMEOUT_STREAK}"
+  fi
+  if [ "${IS_ERROR}" = "1" ]; then
+    # ADR-0028 §2.2: mind_loop.error event。exit_code をそのまま入れる (operator が
+    # フィルタで重要度判定可)。
+    _mindloop_emit_event "mind_loop.error" \
+      ",\"cycle\":${CYCLE},\"exit_code\":${RC},\"streak\":${CYCLE_ERROR_STREAK}"
   fi
   _mindloop_emit_event "mind_loop.end" \
     ",\"cycle\":${CYCLE},\"exit_code\":${RC},\"duration_s\":${DURATION_S}"
@@ -415,6 +445,18 @@ while :; do
     _mindloop_emit_event "mind_loop.auto_kill" \
       ",\"cycle\":${CYCLE},\"reason\":\"timeout_streak\",\"streak\":${CYCLE_TIMEOUT_STREAK},\"max\":${CYCLE_TIMEOUT_STREAK_MAX}"
     exit 5
+  fi
+
+  # ADR-0028 §2.2: error streak 上限到達で notify-human signal を発火。
+  # auto-kill しない — error は operator が forensic 確認すべき再現性のある事象。
+  # 後続 §2.3 (Step 4.4) で notify channel が L1 jsonl + L2 stderr で具体化される。
+  # 本 PR では event emit + stderr WARN まで (= L2)。
+  if [ "${CYCLE_ERROR_STREAK_MAX}" -gt 0 ] && [ "${CYCLE_ERROR_STREAK}" -ge "${CYCLE_ERROR_STREAK_MAX}" ]; then
+    echo "[mind-loop] Mind '${MIND_NAME}' notify-human: ${CYCLE_ERROR_STREAK} consecutive cycle errors >= ${CYCLE_ERROR_STREAK_MAX} (= operator 介入推奨)" | tee -a "${LOG_FILE}" >&2
+    _mindloop_emit_event "mind_loop.error_streak_exceeded" \
+      ",\"cycle\":${CYCLE},\"streak\":${CYCLE_ERROR_STREAK},\"max\":${CYCLE_ERROR_STREAK_MAX}"
+    # streak counter は reset しない (= 毎 cycle 通知が再発火する。これは意図的、
+    # operator が見に来るまで signal を出し続ける)。
   fi
 
   # 終了条件: signal 受信 / max-cycles 到達

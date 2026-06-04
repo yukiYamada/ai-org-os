@@ -571,6 +571,106 @@ class TestMindLoopPerCycleTimeout(unittest.TestCase):
         self.assertEqual(len(timeouts), 0)  # どの cycle も timeout していない
 
 
+@unittest.skipUnless(_bash_available(), "bash required")
+class TestMindLoopErrorEventStreak(unittest.TestCase):
+    """ADR-0028 §2.2: cycle error event + streak。
+
+    stub claude を意図的に exit non-zero にして、mind_loop.error event 発火と
+    streak 連続超過で mind_loop.error_streak_exceeded event 発火を検証。
+    timeout streak と違い auto-kill **しない** ことも確認。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        # stub: 即 exit 2 (= timeout 以外の error をシミュレート)
+        self.err_stub = self.tmp / "err-stub"
+        self.err_stub.write_text(
+            "#!/usr/bin/env bash\nexit 2\n", encoding="utf-8"
+        )
+        self.err_stub.chmod(0o755)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _read_events(self) -> list[dict]:
+        if not self.event_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.event_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run(self, max_cycles: int, error_streak_max: int, claude_bin: Path | None = None) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(claude_bin or self.err_stub)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = str(max_cycles)
+        # timeout を無効化して error 経路だけ走らせる
+        env["AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT"] = "0"
+        env["AI_ORG_OS_MIND_LOOP_ERROR_STREAK"] = str(error_streak_max)
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def test_error_event_emitted_on_non_zero_exit(self) -> None:
+        """stub exit 2 で mind_loop.error event が 1 件 emit される。"""
+        result = self._run(max_cycles=1, error_streak_max=99)
+        events = self._read_events()
+        errs = [e for e in events if e["event"] == "mind_loop.error"]
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(errs[0]["cycle"], 1)
+        self.assertEqual(errs[0]["exit_code"], 2)
+        self.assertEqual(errs[0]["streak"], 1)
+
+    def test_error_streak_increments_consecutive(self) -> None:
+        """連続 error で streak が 1,2,3 と積み上がる。"""
+        result = self._run(max_cycles=3, error_streak_max=99)
+        events = self._read_events()
+        errs = [e for e in events if e["event"] == "mind_loop.error"]
+        self.assertEqual(len(errs), 3)
+        self.assertEqual([e["streak"] for e in errs], [1, 2, 3])
+
+    def test_error_streak_exceeded_event_fires_at_threshold(self) -> None:
+        """streak が max に到達で mind_loop.error_streak_exceeded event が emit。
+        auto-kill **しない** (= exit 5 ではない)。"""
+        result = self._run(max_cycles=2, error_streak_max=2)
+        events = self._read_events()
+        exceeded = [e for e in events if e["event"] == "mind_loop.error_streak_exceeded"]
+        self.assertGreaterEqual(len(exceeded), 1)
+        self.assertEqual(exceeded[0]["streak"], 2)
+        self.assertEqual(exceeded[0]["max"], 2)
+        # auto-kill しないので exit code は 0 (= max_cycles 到達で正常終了)
+        self.assertEqual(result.returncode, 0)
+        # auto_kill event は無い
+        auto_kills = [e for e in events if e["event"] == "mind_loop.auto_kill"]
+        self.assertEqual(auto_kills, [])
+
+    def test_error_streak_resets_on_success(self) -> None:
+        """成功 (exit 0) で streak が reset、再度 error すると 1 から数え直し。
+        single test では切替できないので、ここは「成功 stub では error event ゼロ」を確認。"""
+        ok_stub = self.tmp / "ok-stub"
+        ok_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        ok_stub.chmod(0o755)
+        result = self._run(max_cycles=3, error_streak_max=99, claude_bin=ok_stub)
+        events = self._read_events()
+        errs = [e for e in events if e["event"] == "mind_loop.error"]
+        self.assertEqual(len(errs), 0)
+
+
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
     bash subprocess を回さないので速い。
