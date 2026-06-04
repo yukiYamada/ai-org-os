@@ -57,6 +57,16 @@ fi
 PERIOD="${AI_ORG_OS_LOOP_PERIOD:-30}"
 MAX_CYCLES="${AI_ORG_OS_LOOP_MAX_CYCLES:-0}"
 
+# Phase 5f Step 4.2 / ADR-0028 §2.1: per-cycle timeout (A axiom)。
+# claude が hang したら mind-loop ごと止まる事故 (#134: gm cycle 640s / carol 655s)
+# を救う。0 = timeout 無効、正の値 = 秒数。default 300 秒 (= 5 分、典型 cycle body
+# が 200 秒程度の Phase 5f 実観察から余裕を持たせた値)。
+CYCLE_TIMEOUT="${AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT:-300}"
+# 連続 timeout streak がこれを超えたら Mind を auto-kill (= ADR-0013 Kill 段階の
+# 自動化)。0 = streak 監視無効。default 3 (= 偶発失敗 1-2 回は許容、3 連続 =
+# Mind が機能していないとみなす)。
+CYCLE_TIMEOUT_STREAK_MAX="${AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK:-3}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --period)
@@ -85,6 +95,14 @@ if ! [[ "${PERIOD}" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "${MAX_CYCLES}" =~ ^[0-9]+$ ]]; then
   echo "[ERROR] --max-cycles must be a non-negative integer (got '${MAX_CYCLES}')" >&2
+  exit 1
+fi
+if ! [[ "${CYCLE_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT must be non-negative integer (got '${CYCLE_TIMEOUT}')" >&2
+  exit 1
+fi
+if ! [[ "${CYCLE_TIMEOUT_STREAK_MAX}" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK must be non-negative integer (got '${CYCLE_TIMEOUT_STREAK_MAX}')" >&2
   exit 1
 fi
 
@@ -290,6 +308,15 @@ if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
   exit 4
 fi
 
+# Phase 5f Step 4.2 / ADR-0028 §2.1: per-cycle timeout 用に `timeout` を resolve。
+# GNU coreutils `timeout` を期待 (Linux + Git Bash on Windows でデフォルト)。
+# 不在なら CYCLE_TIMEOUT を強制 0 (= timeout 無効) にして cycle は wrap せず実行。
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || true)"
+if [ "${CYCLE_TIMEOUT}" -gt 0 ] && [ -z "${TIMEOUT_BIN}" ]; then
+  echo "[mind-loop] WARN: \`timeout\` binary not found; per-cycle timeout disabled" >&2
+  CYCLE_TIMEOUT=0
+fi
+
 # ----- ループ本体 -----
 
 CYCLE=0
@@ -331,21 +358,64 @@ while :; do
   # claude をブロッキング呼び出し。標準出力 / エラーをログに混ぜる。
   # CLAUDE.md (Persona) と .mcp.json (Nexus) は Mindspace 内に置かれているので、
   # cwd を Mindspace にすれば自動的に読まれる。
+  # Phase 5f Step 4.2 / ADR-0028 §2.1: CYCLE_TIMEOUT > 0 なら GNU coreutils
+  # `timeout --kill-after=10` で wrap。SIGTERM 後 10 秒猶予→ SIGKILL。
   set +e
-  (
-    cd "${MIND_DIR}"
-    "${CLAUDE_BIN}" -p "${PROMPT}" 2>&1
-  ) >> "${LOG_FILE}"
+  if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
+    (
+      cd "${MIND_DIR}"
+      "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" "${CLAUDE_BIN}" -p "${PROMPT}" 2>&1
+    ) >> "${LOG_FILE}"
+  else
+    (
+      cd "${MIND_DIR}"
+      "${CLAUDE_BIN}" -p "${PROMPT}" 2>&1
+    ) >> "${LOG_FILE}"
+  fi
   RC=$?
   set -e
 
   FINISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   END_EPOCH="$(date -u +%s)"
   DURATION_S=$((END_EPOCH - START_EPOCH))
+
+  # ADR-0028 §2.1: timeout exit code 検出。GNU coreutils timeout の規約:
+  #   124 = SIGTERM (timeout expired)
+  #   137 = 128 + 9 = SIGKILL (kill-after 期限切れ)
+  TIMED_OUT=0
+  if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
+    if [ "${RC}" = "124" ] || [ "${RC}" = "137" ]; then
+      TIMED_OUT=1
+      echo "[mind-loop][cycle ${CYCLE}] TIMEOUT after ${CYCLE_TIMEOUT}s (exit=${RC})" >> "${LOG_FILE}"
+      echo "[mind-loop] WARN: cycle ${CYCLE} timed out after ${CYCLE_TIMEOUT}s (exit=${RC})" >&2
+    fi
+  fi
+
+  # streak 管理: 連続 timeout なら increment、成功なら reset。
+  if [ "${TIMED_OUT}" = "1" ]; then
+    CYCLE_TIMEOUT_STREAK=$((${CYCLE_TIMEOUT_STREAK:-0} + 1))
+  else
+    CYCLE_TIMEOUT_STREAK=0
+  fi
+
   echo "[mind-loop][cycle ${CYCLE}] end ${FINISHED_AT} exit=${RC}" >> "${LOG_FILE}"
-  # ADR-0026 §4.5: mind_loop.end event。
+  # ADR-0026 §4.5: mind_loop.end event。timeout でも end は emit (= cycle は終わった)。
+  if [ "${TIMED_OUT}" = "1" ]; then
+    # ADR-0028 §2.1: mind_loop.timeout event を追加で emit (= 通常 end の補足)。
+    _mindloop_emit_event "mind_loop.timeout" \
+      ",\"cycle\":${CYCLE},\"timeout_s\":${CYCLE_TIMEOUT},\"signal\":\"$([ "${RC}" = "137" ] && echo SIGKILL || echo SIGTERM)\",\"streak\":${CYCLE_TIMEOUT_STREAK}"
+  fi
   _mindloop_emit_event "mind_loop.end" \
     ",\"cycle\":${CYCLE},\"exit_code\":${RC},\"duration_s\":${DURATION_S}"
+
+  # ADR-0028 §2.1: streak 上限到達で Mind を auto-kill (= ADR-0013 Kill 段階)。
+  # 0 ならこの機能は無効 (= 永続させる、operator が手で kill する想定)。
+  if [ "${CYCLE_TIMEOUT_STREAK_MAX}" -gt 0 ] && [ "${CYCLE_TIMEOUT_STREAK}" -ge "${CYCLE_TIMEOUT_STREAK_MAX}" ]; then
+    echo "[mind-loop] Mind '${MIND_NAME}' auto-kill: ${CYCLE_TIMEOUT_STREAK} consecutive cycle timeouts >= ${CYCLE_TIMEOUT_STREAK_MAX}" | tee -a "${LOG_FILE}" >&2
+    _mindloop_emit_event "mind_loop.auto_kill" \
+      ",\"cycle\":${CYCLE},\"reason\":\"timeout_streak\",\"streak\":${CYCLE_TIMEOUT_STREAK},\"max\":${CYCLE_TIMEOUT_STREAK_MAX}"
+    exit 5
+  fi
 
   # 終了条件: signal 受信 / max-cycles 到達
   if [ "${RECEIVED_STOP}" = "1" ]; then

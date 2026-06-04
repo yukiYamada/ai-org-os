@@ -461,6 +461,116 @@ class TestMindLoopPeekInbox(unittest.TestCase):
         self.assertIn("X...", prompt)
 
 
+@unittest.skipUnless(_bash_available() and shutil.which("timeout") is not None,
+                     "bash + GNU timeout required")
+class TestMindLoopPerCycleTimeout(unittest.TestCase):
+    """ADR-0028 §2.1: per-cycle timeout で claude が hang した時に救う。
+
+    stub claude が長時間 sleep → mind-loop の `timeout` wrapper が SIGTERM
+    → 10s 経過で SIGKILL。mind_loop.timeout event が emit され、streak が
+    count される。streak >= max で auto_kill event + exit 5。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        # stub: 60 秒 sleep して exit (= 強制的に hang を模す)
+        self.slow_stub = self.tmp / "slow-stub"
+        self.slow_stub.write_text(
+            "#!/usr/bin/env bash\nsleep 60\nexit 0\n", encoding="utf-8"
+        )
+        self.slow_stub.chmod(0o755)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _read_events(self) -> list[dict]:
+        if not self.event_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.event_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run(self, max_cycles: int, timeout_s: int, streak_max: int) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(self.slow_stub)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = str(max_cycles)
+        env["AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT"] = str(timeout_s)
+        env["AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK"] = str(streak_max)
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+    def test_timeout_event_emitted_on_slow_claude(self) -> None:
+        """timeout=3s で stub が 60s sleep → mind_loop.timeout event が emit。"""
+        # streak_max=99 にして auto-kill 経路を回避、1 cycle で観察
+        result = self._run(max_cycles=1, timeout_s=3, streak_max=99)
+        events = self._read_events()
+        timeouts = [e for e in events if e["event"] == "mind_loop.timeout"]
+        self.assertEqual(len(timeouts), 1, f"expected 1 timeout event, got {len(timeouts)}\nevents={events}")
+        t = timeouts[0]
+        self.assertEqual(t["cycle"], 1)
+        self.assertEqual(t["timeout_s"], 3)
+        # GNU timeout 規約: 最初 SIGTERM (RC 124)、kill-after=10 経過で SIGKILL (RC 137)。
+        # stub は exit せず sleep 60 なので、SIGTERM では完了せず SIGKILL に至る可能性が高い。
+        self.assertIn(t["signal"], ("SIGTERM", "SIGKILL"))
+
+    def test_streak_increments_on_consecutive_timeouts(self) -> None:
+        """連続 timeout で streak が積み上がる。"""
+        result = self._run(max_cycles=3, timeout_s=2, streak_max=99)
+        events = self._read_events()
+        timeouts = [e for e in events if e["event"] == "mind_loop.timeout"]
+        # 3 cycle 全て timeout → streak = 1, 2, 3
+        self.assertEqual(len(timeouts), 3)
+        streaks = [e["streak"] for e in timeouts]
+        self.assertEqual(streaks, [1, 2, 3])
+
+    def test_auto_kill_when_streak_reaches_max(self) -> None:
+        """streak が max に到達 → mind_loop.auto_kill event + exit 5。"""
+        result = self._run(max_cycles=99, timeout_s=2, streak_max=2)
+        events = self._read_events()
+        # streak=2 で auto_kill → cycle 2 で抜ける
+        auto_kills = [e for e in events if e["event"] == "mind_loop.auto_kill"]
+        self.assertEqual(len(auto_kills), 1)
+        self.assertEqual(auto_kills[0]["reason"], "timeout_streak")
+        self.assertEqual(auto_kills[0]["streak"], 2)
+        self.assertEqual(auto_kills[0]["max"], 2)
+        # exit code 5
+        self.assertEqual(result.returncode, 5)
+
+    def test_streak_resets_on_success(self) -> None:
+        """1 cycle 成功すれば streak は 0 に戻る。
+
+        stub を「最初の cycle は遅い、2 回目以降は即 exit」に切り替えるのは複雑
+        なので、ここでは timeout を大きく取って claude が間に合うケースで
+        streak が積まれないことだけ確認する。
+        """
+        # stub を即 exit に差し替え
+        self.slow_stub.write_text(
+            "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+        )
+        self.slow_stub.chmod(0o755)
+        result = self._run(max_cycles=2, timeout_s=5, streak_max=99)
+        events = self._read_events()
+        timeouts = [e for e in events if e["event"] == "mind_loop.timeout"]
+        self.assertEqual(len(timeouts), 0)  # どの cycle も timeout していない
+
+
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
     bash subprocess を回さないので速い。
