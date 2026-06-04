@@ -671,6 +671,144 @@ class TestMindLoopErrorEventStreak(unittest.TestCase):
         self.assertEqual(len(errs), 0)
 
 
+@unittest.skipUnless(_bash_available(), "bash required")
+class TestMindLoopNotifyHuman(unittest.TestCase):
+    """ADR-0028 §2.3 L1: notify-human channel が `$AI_ORG_OS_HOME/logs/notify.jsonl`
+    に書かれる。
+
+    error_streak_exceeded (warning) と auto_kill (critical) の 2 経路を検証。
+    schema: { ts, severity, source, actor, event, message, ...event-specific... }
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        self.notify_log = self.home / "logs" / "notify.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _read_notify(self) -> list[dict]:
+        if not self.notify_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.notify_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _make_stub(self, content: str) -> Path:
+        p = self.tmp / "stub"
+        p.write_text(content, encoding="utf-8")
+        p.chmod(0o755)
+        return p
+
+    def test_no_notify_on_normal_cycles(self) -> None:
+        """successful cycle では notify.jsonl は作られない / 空。"""
+        stub = self._make_stub("#!/usr/bin/env bash\nexit 0\n")
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="2",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="0",
+        )
+        subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(self._read_notify(), [])
+
+    def test_notify_warning_on_error_streak(self) -> None:
+        """error streak 超過で notify.jsonl に severity=warning entry。"""
+        stub = self._make_stub("#!/usr/bin/env bash\nexit 2\n")
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="2",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="0",
+            AI_ORG_OS_MIND_LOOP_ERROR_STREAK="2",
+        )
+        subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        notify = self._read_notify()
+        self.assertGreaterEqual(len(notify), 1)
+        # 最初の notify entry を検証
+        n = notify[0]
+        self.assertEqual(n["severity"], "warning")
+        self.assertEqual(n["source"], "mind-loop")
+        self.assertEqual(n["actor"], "alice")
+        self.assertEqual(n["event"], "mind_loop.error_streak_exceeded")
+        self.assertIn("Mind 'alice'", n["message"])
+        self.assertEqual(n["streak"], 2)
+        self.assertEqual(n["max"], 2)
+        # ts は ISO-8601 ms precision Z 形式
+        self.assertRegex(n["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+    @unittest.skipUnless(shutil.which("timeout") is not None, "GNU timeout required")
+    def test_notify_critical_on_auto_kill(self) -> None:
+        """timeout streak で auto-kill 経路、notify.jsonl に severity=critical。"""
+        slow_stub = self._make_stub("#!/usr/bin/env bash\nsleep 60\nexit 0\n")
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(slow_stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="99",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="2",
+            AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK="2",
+        )
+        result = subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+        # auto-kill で exit 5
+        self.assertEqual(result.returncode, 5)
+        notify = self._read_notify()
+        criticals = [n for n in notify if n["severity"] == "critical"]
+        self.assertEqual(len(criticals), 1)
+        n = criticals[0]
+        self.assertEqual(n["event"], "mind_loop.auto_kill")
+        self.assertEqual(n["actor"], "alice")
+        self.assertIn("auto-killed", n["message"])
+        self.assertEqual(n["reason"], "timeout_streak")
+        self.assertEqual(n["streak"], 2)
+
+    def test_notify_jsonl_valid_json_per_line(self) -> None:
+        """notify.jsonl の各行が valid JSON (= 1 line 1 event)。"""
+        stub = self._make_stub("#!/usr/bin/env bash\nexit 2\n")
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="3",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="0",
+            AI_ORG_OS_MIND_LOOP_ERROR_STREAK="1",
+        )
+        subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        raw = self.notify_log.read_text(encoding="utf-8")
+        lines = [line for line in raw.splitlines() if line]
+        # 3 cycle 全 error、streak_max=1 なので 3 件 notify
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            json.loads(line)  # parse 失敗で test fail
+
+
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
     bash subprocess を回さないので速い。

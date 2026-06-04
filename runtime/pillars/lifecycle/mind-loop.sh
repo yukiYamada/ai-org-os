@@ -288,6 +288,45 @@ _mindloop_peek_inbox() {
   "${PEEK_PYTHON_BIN}" "${CONDUIT_DIR}/peek_inbox.py" "${mind_name}" 2>/dev/null || true
 }
 
+# Phase 5f Step 4.4 / ADR-0028 §2.3: notify-human channel L1
+# (`$AI_ORG_OS_HOME/logs/notify.jsonl`)。mind-loop.jsonl は detail event (machine
+# 観察用) を全部書くが、notify.jsonl は **operator が見るべき高シグナル subset**
+# だけを集約する。observe.py から別 view で読める想定。
+#
+# Schema (= ADR-0028 §2.3):
+#   { ts, severity, source, actor, event, message, ...event-specific... }
+# severity: "warning" / "error" / "critical"
+# source: "mind-loop" (本 helper)、後続 PR で conductor / actuator にも展開
+#
+# F3 準拠: mkdir / write 失敗は WARN を stderr に出すだけで loop は続ける。
+NOTIFY_LOG_FILE="${RUNTIME_HOME}/logs/notify.jsonl"
+
+# Usage: _mindloop_notify <severity> <event_name> <message> [<extra_json_fields>]
+# extra は leading comma 付きの JSON フラグメント。message は double-quote
+# 内に literal 埋め込み (= 改行 / " を含めない呼び出し側責任、本 helper では
+# bash printf に渡すだけ)。
+_mindloop_notify() {
+  local severity="$1"
+  local event="$2"
+  local message="$3"
+  local extra="${4:-}"
+  local notify_dir
+  notify_dir="$(dirname "${NOTIFY_LOG_FILE}")"
+  if ! mkdir -p "${notify_dir}" 2>/dev/null; then
+    echo "[mind-loop] WARN: notify mkdir failed: ${notify_dir}" >&2
+    return 0
+  fi
+  local ts
+  ts="$(_mindloop_iso_ms)"
+  if ! printf '{"ts":"%s","severity":"%s","source":"mind-loop","actor":"%s","event":"%s","message":"%s"%s}\n' \
+        "${ts}" "${severity}" "${MIND_NAME}" "${event}" "${message}" "${extra}" \
+        >> "${NOTIFY_LOG_FILE}" 2>/dev/null; then
+    echo "[mind-loop] WARN: notify write failed: ${NOTIFY_LOG_FILE}" >&2
+    return 0
+  fi
+  return 0
+}
+
 # Usage: _mindloop_emit_event <event_name> [<extra_json_fields>]
 # extra は leading comma 付きの JSON フラグメント
 # (例: ',"cycle":1,"pid":12345')。空なら拡張 field なし。
@@ -444,16 +483,23 @@ while :; do
     echo "[mind-loop] Mind '${MIND_NAME}' auto-kill: ${CYCLE_TIMEOUT_STREAK} consecutive cycle timeouts >= ${CYCLE_TIMEOUT_STREAK_MAX}" | tee -a "${LOG_FILE}" >&2
     _mindloop_emit_event "mind_loop.auto_kill" \
       ",\"cycle\":${CYCLE},\"reason\":\"timeout_streak\",\"streak\":${CYCLE_TIMEOUT_STREAK},\"max\":${CYCLE_TIMEOUT_STREAK_MAX}"
+    # ADR-0028 §2.3 L1: notify-human channel に critical 通知。
+    _mindloop_notify "critical" "mind_loop.auto_kill" \
+      "Mind '${MIND_NAME}' auto-killed after ${CYCLE_TIMEOUT_STREAK} consecutive cycle timeouts" \
+      ",\"cycle\":${CYCLE},\"reason\":\"timeout_streak\",\"streak\":${CYCLE_TIMEOUT_STREAK},\"max\":${CYCLE_TIMEOUT_STREAK_MAX}"
     exit 5
   fi
 
   # ADR-0028 §2.2: error streak 上限到達で notify-human signal を発火。
   # auto-kill しない — error は operator が forensic 確認すべき再現性のある事象。
-  # 後続 §2.3 (Step 4.4) で notify channel が L1 jsonl + L2 stderr で具体化される。
-  # 本 PR では event emit + stderr WARN まで (= L2)。
+  # ADR-0028 §2.3: notify channel L1 (logs/notify.jsonl) + L2 (stderr WARN) 経由。
   if [ "${CYCLE_ERROR_STREAK_MAX}" -gt 0 ] && [ "${CYCLE_ERROR_STREAK}" -ge "${CYCLE_ERROR_STREAK_MAX}" ]; then
     echo "[mind-loop] Mind '${MIND_NAME}' notify-human: ${CYCLE_ERROR_STREAK} consecutive cycle errors >= ${CYCLE_ERROR_STREAK_MAX} (= operator 介入推奨)" | tee -a "${LOG_FILE}" >&2
     _mindloop_emit_event "mind_loop.error_streak_exceeded" \
+      ",\"cycle\":${CYCLE},\"streak\":${CYCLE_ERROR_STREAK},\"max\":${CYCLE_ERROR_STREAK_MAX}"
+    # ADR-0028 §2.3 L1: notify-human channel に warning 通知。
+    _mindloop_notify "warning" "mind_loop.error_streak_exceeded" \
+      "Mind '${MIND_NAME}' has ${CYCLE_ERROR_STREAK} consecutive cycle errors (operator should investigate)" \
       ",\"cycle\":${CYCLE},\"streak\":${CYCLE_ERROR_STREAK},\"max\":${CYCLE_ERROR_STREAK_MAX}"
     # streak counter は reset しない (= 毎 cycle 通知が再発火する。これは意図的、
     # operator が見に来るまで signal を出し続ける)。
