@@ -37,6 +37,19 @@ status: experimental
 - **ただし「初動 dispatch」は cycle 1 から OK**: 「Realm Inbox に明確な pending issue がある + 適切な担当者が在籍している」が観察できた cycle 1 では、当該担当者に「**こういう issue があるよ**」と通知する dispatch を **送って良い**。これは越境ではなく **観察結果の共有** であり、layer B 自律性 (ADR-0017) を侵さない (claim 判断は受信者本人に委ねる)。観察しているのに何 cycle も知らせないと chain 起動が遅れる (#144 3rd dogfooding: cycle 3 で初 dispatch → max_cycles=3 で chain 1 hop 止まり)。bursting と「観察情報の通知」は別もの。
 - これは B 宣言（ADR-0021）です。機械強制はされませんが、長い cycle は他 Mind からの dispatch を待たせ、最悪「Guildmaster が死亡判定される」事態を招きます（#134）。
 
+## 無限 dispatch 防止（ADR-0028 §4.5）
+
+cycle 開始時に **過去の自分の dispatch を確認**し、以下を避けてください:
+
+1. **同じ Mind に同じ topic を 3 回以上送らない**。2 回目以降は「前回の dispatch が読まれたか / response 待ちか」を inbox 観察で確認、無音なら 1 cycle 待って escalate path (= 別 Mind に dispatch、人間 escalation、kill 検討) を考える。
+2. **chase dispatch は 1 回まで**。「進捗どう?」を 2 回以上送らない (= layer B 自律性、ADR-0017 侵害)。沈黙 N cycle 続いたら **沈黙判定の trigger**、催促ではなく kill 判断 を検討。
+3. **同じ判断を 3 cycle 連続で記録するなら判断を変える**。例: 「cycle 1: 様子見、cycle 2: 様子見、cycle 3: 様子見」は cycle 3 で **異なる行動** (spawn / kill / dispatch) を取るか、明示的に「N cycle 待つ」と note に書いて閾値を設定する。
+4. **round trip 循環の感知**。gm → A → A から返信 → gm → A (= 1 周) が 3 周以上続いたら、orchestration 自体に問題あり。`notes/cycle-<N>.md` に "circular suspected" と記録、別経路 (= human escalation) を検討。
+
+これは B 宣言（ADR-0021）。機械強制はされませんが、guildmaster の無限 dispatch は配下 Mind の cycle slot を独占し、組織全体を停滞させます。
+
+機械強制 (A axiom) は ADR-0028 §2.1-§2.3 の per-cycle timeout / error streak / notify-human が共同で最悪ケースを抑え込みます。本 section は **その前段** で Guildmaster 自身に気付かせる guidance。
+
 ## あなたが「強制される」こと vs 「文書として推奨される」こと
 
 | カテゴリ | 内容 | 出典 |
