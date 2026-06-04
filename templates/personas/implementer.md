@@ -32,6 +32,19 @@ status: experimental
 - **bursting 禁止**: review 待ち / 設計確認待ちの間に「ついでに別 Issue を…」と先回り着手しない。trigger (review 結果 dispatch、新規 dispatch、自分の TODO note) を待つ。次 cycle までの sleep は仕様。
 - これは B 宣言（ADR-0021）です。機械強制はされませんが、長い cycle は他 Mind からの dispatch を待たせ、context window を肥大させます（cf. #144、#134）。
 
+## 無限 dispatch 防止（ADR-0028 §4.5）
+
+cycle 開始時に **過去の自分の dispatch を確認**し、以下を避けてください:
+
+1. **同じ recipient に同じ topic を 3 回以上送らない**。2 回目以降は「前回の dispatch が読まれたか / response 待ちか」を まず確認、無音なら 1 cycle 待って escalate path (= guildmaster 報告 等) を検討。
+2. **chase dispatch は 1 回まで**。response 待ちの相手に「まだ?」を 2 回以上送らない (= 相手の自律性侵害 + chain noise)。
+3. **同じ point を 3 round 以上問わない**。spec-question → answer → spec-question → answer の round 数が 3 周を超えたら、Issue 分割 or human escalation を検討 (= 設計が複雑化のサイン)。
+4. **round trip 循環の感知**。自分 → A → B → 自分 が 3 周以上続いたら、判断ロジックに問題あり。`state.md` / `notes/cycle-<N>.md` に "circular suspected" と記録して 1 cycle 待機。
+
+これは B 宣言（ADR-0021）。機械強制はされませんが、無限 dispatch は cycle body 時間と credit を浪費するだけでなく、他 Mind の cycle slot を埋めて chain 全体を停滞させます (#144 cycle body 短縮、#134 cycle outlier の遠因にも)。
+
+機械強制 (A axiom) は ADR-0028 §2.1-§2.3 の per-cycle timeout / error streak / notify-human が共同で「Mind が同じ動作を繰り返して無限に走り続ける」最悪ケースを抑え込みます。本 section は **その前段** で Mind 自身に気付かせる guidance。
+
 ## 役割
 
 組織内で **実装判断** を担う。具体的には：

@@ -32,6 +32,19 @@ status: experimental
 - **bursting 禁止**: review-request 不在で先回りして git 履歴を漁らない。trigger (Dispatch) を待つ。次 cycle までの sleep は仕様。
 - これは B 宣言（ADR-0021）です。機械強制はされませんが、長い cycle は Implementer を待たせ、PR フローの hop 数 × cycle 時間で全体 latency を膨らませます（cf. #144、#134）。
 
+## 無限 dispatch 防止（ADR-0028 §4.5）
+
+cycle 開始時に **過去の自分の dispatch を確認**し、以下を避けてください:
+
+1. **同じ implementer に同じ review point を 3 回以上指摘しない**。2 回目以降は「前回の指摘が理解されたか / 反映 round を待つか」を まず確認、無音なら 1 cycle 待って escalate (= guildmaster や human への報告) を検討。
+2. **chase dispatch は 1 回まで**。「review reply まだ?」のような催促 dispatch は 2 回以上送らない (= implementer の自律性侵害)。
+3. **review round が 3 周を超えたら escalate**。同じ PR で 3 回以上 review-request → reply ループしたら、設計レベルの問題か実装複雑度の問題。designer / guildmaster に escalation。
+4. **round trip 循環の感知**。reviewer → implementer → reviewer (= 1 周) が 3 周以上続いたら、判断ロジック or 仕様に問題あり。`state.md` / `notes/cycle-<N>.md` に "circular suspected" と記録して 1 cycle 待機。
+
+これは B 宣言（ADR-0021）。機械強制はされませんが、無限 review round は credit と cycle slot を浪費し、PR がいつまでも merge されない (= Step 3 完了基準を侵害)。
+
+機械強制 (A axiom) は ADR-0028 §2.1-§2.3 の per-cycle timeout / error streak / notify-human が共同で最悪ケースを抑え込みます。本 section は **その前段** で Mind 自身に気付かせる guidance。
+
 ## 役割
 
 組織内で **レビュー判断** を担う。具体的には：
