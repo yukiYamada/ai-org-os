@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 5g.B (#172) chunk 1: claude `--output-format json` を読んで mind_loop.cost
+"""Phase 5g.B (#172) chunk 1+3: claude `--output-format json` を読んで mind_loop.cost
 event を emit、result text を stdout に出力するヘルパ。
 
 mind-loop.sh から呼ばれる:
@@ -9,12 +9,18 @@ mind-loop.sh から呼ばれる:
   - json_input_file が読めない / parse 失敗 → exit 0 (= silent fail、cost event なし)
   - parse 成功 → event_log_path に mind_loop.cost を append、result text を stdout
   - cost event 書き込み失敗時も silent (Realm を止めない、ADR-0013 F3)
+
+Chunk 3 (#172): env `AI_ORG_OS_COST_WARN_USD` が正の値の場合、cost_usd が
+threshold を超えたら追加で `mind_loop.cost_warn` event を emit し、**exit 10**
+(= notify-human を促す signal) を返す。mind-loop.sh 側で _mindloop_notify を
+呼ぶ責務分け。
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -100,7 +106,38 @@ def main(argv: list[str]) -> int:
         # event 書き込み失敗時も Realm を止めない (ADR-0013 §1 F3)
         return 0
 
-    return 0
+    # Chunk 3 (#172): threshold check。AI_ORG_OS_COST_WARN_USD が正の値で、
+    # 当該 cycle cost が >= threshold なら mind_loop.cost_warn を追加 emit し
+    # exit 10 を返す (= mind-loop.sh が notify-human L1 を起動する signal)。
+    # threshold 不正 (parse 失敗 / 0 以下) は機能無効化 (= 通常 return 0)。
+    try:
+        threshold_raw = os.environ.get("AI_ORG_OS_COST_WARN_USD", "0")
+        threshold = float(threshold_raw)
+    except (TypeError, ValueError):
+        return 0
+    if threshold <= 0:
+        return 0
+
+    cost_usd = float(event.get("cost_usd") or 0)
+    if cost_usd < threshold:
+        return 0
+
+    warn_event = {
+        "ts": _now_iso(),
+        "event": "mind_loop.cost_warn",
+        "mind": mind,
+        "cycle": cycle,
+        "cost_usd": cost_usd,
+        "threshold_usd": threshold,
+    }
+    try:
+        with event_log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(warn_event, ensure_ascii=False) + "\n")
+    except OSError:
+        # warn event 書き込み失敗でも cost event は既に出している → silent 続行
+        return 0
+
+    return 10
 
 
 if __name__ == "__main__":
