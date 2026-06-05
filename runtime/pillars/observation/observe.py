@@ -527,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
     as_trace = "--trace" in argv
     as_cost = "--cost" in argv
     as_status = "--status" in argv
+    as_chain = "--chain" in argv
+    as_mermaid = "--mermaid" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
 
@@ -558,6 +560,19 @@ def main(argv: list[str] | None = None) -> int:
         from status import cmd_status  # noqa: PLC0415
 
         return cmd_status(as_json=as_json)
+
+    # Phase 5g.B #175: --chain は dispatch.sent / dispatch.acked event から
+    # chain timeline を text or mermaid で表示。--from / --since と組み合わせ可。
+    # --mermaid フラグで markdown 用の sequence diagram を出力。
+    if as_chain:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from chain import cmd_chain  # noqa: PLC0415
+
+        from_mind = _parse_str_option(argv, "--from")
+        since = _parse_str_option(argv, "--since")
+        return cmd_chain(
+            from_mind=from_mind, since=since, as_mermaid=as_mermaid,
+        )
 
     now_epoch = time.time()
 
