@@ -27,11 +27,25 @@ WORKSPACE="default"
 # Phase 5d-4 (ADR-0022): --workspace が明示されたかを覚えておく。
 # 解決順 (引数 > Guild manifest > default) の middle layer 判定に使う。
 WORKSPACE_FROM_ARG=0
+# Phase 5g.B #171: 既存 preserved snapshot から state.md / notes/ を復元する。
+RESTORE_FROM=""
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --start-loop)
       START_LOOP=1
+      shift
+      ;;
+    --restore-from)
+      if [ "$#" -lt 2 ]; then
+        echo "[ERROR] --restore-from requires a value" >&2
+        exit 1
+      fi
+      RESTORE_FROM="$2"
+      shift 2
+      ;;
+    --restore-from=*)
+      RESTORE_FROM="${1#--restore-from=}"
       shift
       ;;
     --guild)
@@ -62,10 +76,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     -h|--help)
       cat <<HELP
-Usage: $0 [--start-loop] [--guild <name>] [--workspace <name>] <kind> <persona> <mind-name>
+Usage: $0 [--start-loop] [--guild <name>] [--workspace <name>] [--restore-from <path>] <kind> <persona> <mind-name>
 
 Options:
   --start-loop          Launch mind-loop.sh in the background after spawning (ADR-0010).
+  --restore-from <path> Restore state.md + notes/ from a preserved snapshot directory
+                        (typically \$AI_ORG_OS_HOME/preserved/<previous-mind-name>/,
+                        written by kill-mind --preserve). Persona / Workspace / .mcp.json
+                        are still fresh from the binding chosen at this spawn. Phase 5g.B #171.
   --guild <name>        Guild to which this Mind belongs (default: "default", ADR-0019).
                         Manifest is looked up at \$AI_ORG_OS_HOME/guilds/<name>/manifest.md
                         first (overlay), then templates/guilds/<name>/manifest.md
@@ -473,6 +491,31 @@ cat > "${MIND_DIR}/.mcp.json" <<JSON
   }
 }
 JSON
+
+# Phase 5g.B #171: --restore-from が指定されていたら preserved snapshot から
+# state.md / notes/ を Mindspace に copy する。CLAUDE.md / .mcp.json / workspace
+# は復元しない (= Persona / Workspace から fresh、operator が選んだ binding を尊重)。
+# 復元元 path が存在しない / 内容無し → WARN + 継続 (fresh spawn と等価)。
+if [ -n "${RESTORE_FROM}" ]; then
+  if [ ! -d "${RESTORE_FROM}" ]; then
+    echo "[spawn-mind] WARN: --restore-from '${RESTORE_FROM}' is not a directory, skipping" >&2
+  else
+    RESTORED_ANY=0
+    if [ -f "${RESTORE_FROM}/state.md" ]; then
+      cp "${RESTORE_FROM}/state.md" "${MIND_DIR}/state.md" 2>/dev/null \
+        && { echo "[restore] state.md <- ${RESTORE_FROM}/state.md"; RESTORED_ANY=1; } \
+        || echo "[restore] WARN: copy state.md failed" >&2
+    fi
+    if [ -d "${RESTORE_FROM}/notes" ]; then
+      cp -R "${RESTORE_FROM}/notes" "${MIND_DIR}/notes" 2>/dev/null \
+        && { echo "[restore] notes/ <- ${RESTORE_FROM}/notes/"; RESTORED_ANY=1; } \
+        || echo "[restore] WARN: copy notes/ failed" >&2
+    fi
+    if [ "${RESTORED_ANY}" = "0" ]; then
+      echo "[spawn-mind] WARN: --restore-from '${RESTORE_FROM}' had no state.md or notes/, Mindspace stays fresh" >&2
+    fi
+  fi
+fi
 
 echo "[spawn-mind] Mind '${MIND_NAME}' is ready at ${MIND_DIR}"
 if [ "${WS_WANT_WORKTREE}" = "1" ]; then
