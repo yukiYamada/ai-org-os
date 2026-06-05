@@ -526,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     as_for_warden = "--for-warden" in argv
     as_trace = "--trace" in argv
     as_cost = "--cost" in argv
+    as_status = "--status" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
 
@@ -548,6 +549,15 @@ def main(argv: list[str] | None = None) -> int:
         mind = _parse_str_option(argv, "--mind")
         since = _parse_str_option(argv, "--since")
         return cmd_cost(mind=mind, since=since, as_json=as_json)
+
+    # Phase 5g.B #174: --status は「いまの Realm」を 1 view に集約。後追い
+    # (--trace / --cost) と違い現時点の生死 / 進行 / 累計を返す。--json と
+    # 組み合わせ可。`observe.py --status` だけで Realm の health overview が出る。
+    if as_status:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from status import cmd_status  # noqa: PLC0415
+
+        return cmd_status(as_json=as_json)
 
     now_epoch = time.time()
 
