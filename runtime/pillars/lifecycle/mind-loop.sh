@@ -59,9 +59,11 @@ MAX_CYCLES="${AI_ORG_OS_LOOP_MAX_CYCLES:-0}"
 
 # Phase 5f Step 4.2 / ADR-0028 §2.1: per-cycle timeout (A axiom)。
 # claude が hang したら mind-loop ごと止まる事故 (#134: gm cycle 640s / carol 655s)
-# を救う。0 = timeout 無効、正の値 = 秒数。default 300 秒 (= 5 分、典型 cycle body
-# が 200 秒程度の Phase 5f 実観察から余裕を持たせた値)。
-CYCLE_TIMEOUT="${AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT:-300}"
+# を救う。0 = timeout 無効、正の値 = 秒数。
+# default 900s (= 15 分、Step 4.6 / #160 で 300s default が PR-mode に厳しすぎ
+# (bob cycle 4 が 956s で PR #154 を作成した実績あり) と判明したため拡張)。
+# 真の hang (#134 root cause、20 分以上の継続応答停止) は依然 catch される。
+CYCLE_TIMEOUT="${AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT:-900}"
 # 連続 timeout streak がこれを超えたら Mind を auto-kill (= ADR-0013 Kill 段階の
 # 自動化)。0 = streak 監視無効。default 3 (= 偶発失敗 1-2 回は許容、3 連続 =
 # Mind が機能していないとみなす)。
