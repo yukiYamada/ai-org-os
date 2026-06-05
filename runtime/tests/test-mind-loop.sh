@@ -32,7 +32,11 @@ cat > "${STUB_DIR}/fake-claude.sh" <<'STUB'
 #!/usr/bin/env bash
 # Mind loop test stub. Just echoes the prompt and exits 0.
 # Sleep slightly so the cycle isn't instant (helps signal-during-cycle tests).
-echo "fake-claude received args: $@"
+# Phase 5g.B #172: mind-loop.sh が stdout を per-cycle JSON file へ、stderr を
+# LOG_FILE へ split するようになったため、test 用の trace 出力は stderr に出す
+# (= LOG_FILE で grep される側)。stdout は claude `--output-format json` の
+# JSON 出力に予約されている。
+echo "fake-claude received args: $@" >&2
 sleep 0.2
 exit 0
 STUB
