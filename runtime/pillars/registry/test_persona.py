@@ -16,7 +16,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from persona import (  # noqa: E402
+    PersonaError,
     PersonaInfo,
+    compose_persona,
     get_persona,
     is_registered,
     list_personas,
@@ -224,6 +226,158 @@ class TestCli(unittest.TestCase):
         with patch("sys.stderr", new_callable=StringIO):
             rc = main(["persona.py"])
         self.assertEqual(rc, 2)
+
+
+class TestComposePersona(unittest.TestCase):
+    """Phase 5g.A #166: mixins を body 末尾に append する composer。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.personas = Path(self._tmp.name) / "personas"
+        self.mixins = Path(self._tmp.name) / "mixins"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_mixin(self, name: str, body: str, with_frontmatter: bool = True) -> Path:
+        self.mixins.mkdir(parents=True, exist_ok=True)
+        if with_frontmatter:
+            content = f"---\nmixin: {name}\nversion: 0.1\n---\n\n{body}\n"
+        else:
+            content = body + "\n"
+        p = self.mixins / f"{name}.md"
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def _write_persona_with_body(self, name: str, body: str, mixins_str: str = "") -> Path:
+        self.personas.mkdir(parents=True, exist_ok=True)
+        if mixins_str:
+            fm_extra = f"mixins: {mixins_str}\n"
+        else:
+            fm_extra = ""
+        content = (
+            f"---\npersona: {name}\nversion: 0.1\nstatus: experimental\n{fm_extra}---\n\n{body}\n"
+        )
+        p = self.personas / f"{name}.md"
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_no_mixins_returns_body_unchanged(self) -> None:
+        """mixins 無しなら本文がそのまま返る。"""
+        self._write_persona_with_body("plain", "## Role\nPlain text body.")
+        out = compose_persona("plain", personas_dir=self.personas, mixins_dir=self.mixins)
+        self.assertIn("## Role", out)
+        self.assertIn("Plain text body.", out)
+        # frontmatter も保持される (= spawn-mind が CLAUDE.md に置く前提)
+        self.assertIn("persona: plain", out)
+
+    def test_single_mixin_appended_to_end(self) -> None:
+        """mixin が body の末尾に append される (= frontmatter 剥がし + body のみ)。"""
+        self._write_mixin("foot", "## Foot Section\nFoot content.")
+        self._write_persona_with_body(
+            "withfoot",
+            "## Main\nMain content.",
+            mixins_str="[foot]",
+        )
+        out = compose_persona(
+            "withfoot", personas_dir=self.personas, mixins_dir=self.mixins,
+        )
+        self.assertIn("## Main", out)
+        self.assertIn("## Foot Section", out)
+        # foot は main の後
+        self.assertLess(out.find("## Main"), out.find("## Foot Section"))
+        # mixin frontmatter は剥がれている
+        self.assertNotIn("mixin: foot", out)
+
+    def test_multiple_mixins_in_order(self) -> None:
+        """複数 mixin は順序通り append される。"""
+        self._write_mixin("a", "## A")
+        self._write_mixin("b", "## B")
+        self._write_mixin("c", "## C")
+        self._write_persona_with_body(
+            "multi", "## Main", mixins_str="[a, b, c]",
+        )
+        out = compose_persona(
+            "multi", personas_dir=self.personas, mixins_dir=self.mixins,
+        )
+        a_pos = out.find("## A")
+        b_pos = out.find("## B")
+        c_pos = out.find("## C")
+        self.assertGreater(a_pos, 0)
+        self.assertGreater(b_pos, a_pos)
+        self.assertGreater(c_pos, b_pos)
+
+    def test_missing_mixin_raises(self) -> None:
+        """mixin が見つからない → PersonaError (= silent fail せず spawn を止める)。"""
+        self._write_persona_with_body(
+            "bad", "## Main", mixins_str="[nonexistent]",
+        )
+        with self.assertRaises(PersonaError) as ctx:
+            compose_persona(
+                "bad", personas_dir=self.personas, mixins_dir=self.mixins,
+            )
+        self.assertIn("unknown mixin", str(ctx.exception))
+
+    def test_persona_not_found_raises(self) -> None:
+        with self.assertRaises(PersonaError):
+            compose_persona(
+                "ghost", personas_dir=self.personas, mixins_dir=self.mixins,
+            )
+
+    def test_mixin_without_frontmatter(self) -> None:
+        """mixin に frontmatter が無くても body は append される。"""
+        self._write_mixin("nofm", "## NoFm\nbody", with_frontmatter=False)
+        self._write_persona_with_body("withnofm", "## Main", mixins_str="[nofm]")
+        out = compose_persona(
+            "withnofm", personas_dir=self.personas, mixins_dir=self.mixins,
+        )
+        self.assertIn("## NoFm", out)
+
+    def test_empty_mixins_list(self) -> None:
+        """mixins: [] (空 list) → 本文そのまま。"""
+        self._write_persona_with_body("empty", "## Main", mixins_str="[]")
+        out = compose_persona(
+            "empty", personas_dir=self.personas, mixins_dir=self.mixins,
+        )
+        self.assertIn("## Main", out)
+
+
+class TestComposeCli(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.personas_dir = Path(self._tmp.name) / "personas"
+        self.mixins_dir = Path(self._tmp.name) / "mixins"
+        # 既存 fixture を再利用
+        _write_persona(self.personas_dir, "demo")
+        import os
+        self._old_p = os.environ.get("AI_ORG_OS_PERSONAS_DIR")
+        self._old_m = os.environ.get("AI_ORG_OS_PERSONA_MIXINS_DIR")
+        os.environ["AI_ORG_OS_PERSONAS_DIR"] = str(self.personas_dir)
+        os.environ["AI_ORG_OS_PERSONA_MIXINS_DIR"] = str(self.mixins_dir)
+
+    def tearDown(self) -> None:
+        import os
+        if self._old_p is None:
+            os.environ.pop("AI_ORG_OS_PERSONAS_DIR", None)
+        else:
+            os.environ["AI_ORG_OS_PERSONAS_DIR"] = self._old_p
+        if self._old_m is None:
+            os.environ.pop("AI_ORG_OS_PERSONA_MIXINS_DIR", None)
+        else:
+            os.environ["AI_ORG_OS_PERSONA_MIXINS_DIR"] = self._old_m
+        self._tmp.cleanup()
+
+    def test_compose_cli_ok(self) -> None:
+        with patch("sys.stdout", new_callable=StringIO) as out:
+            rc = main(["persona.py", "compose", "demo"])
+        self.assertEqual(rc, 0)
+        self.assertIn("persona: demo", out.getvalue())
+
+    def test_compose_cli_missing_persona(self) -> None:
+        with patch("sys.stderr", new_callable=StringIO) as err:
+            rc = main(["persona.py", "compose", "ghost"])
+        self.assertEqual(rc, 1)
+        self.assertIn("not registered", err.getvalue())
 
 
 if __name__ == "__main__":
