@@ -647,6 +647,39 @@ class TestWardenInboxFeedback(unittest.TestCase):
         self.assertEqual(result.warden_replies_acked, 0)
         mock_ack.assert_not_called()
 
+    def test_warden_replies_acked_on_fallback_no_key(self) -> None:
+        """#123: fallback-no-key は回復不能なので ack 側に倒す (inbox 無限蓄積防止)。
+
+        ADR-0025 §2 で at-least-once 原則を意図的に部分緩和した結果の検証。"""
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        fake_replies = [
+            {"msg_id": "id-1", "from": "alice", "topic": "t", "body": "b"},
+            {"msg_id": "id-2", "from": "bob", "topic": "t", "body": "b"},
+        ]
+
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.make_client") as mock_make, \
+             patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch("conductor._ack_warden_inbox", return_value=2) as mock_ack:
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            from judgment import AnthropicNotConfigured
+            mock_make.side_effect = AnthropicNotConfigured("no key")
+
+            result = run_one_cycle(
+                1, client=None,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+
+        self.assertEqual(result.judgment_status, "fallback-no-key")
+        self.assertEqual(result.warden_replies_read, 2)
+        self.assertEqual(result.warden_replies_acked, 2)
+        mock_ack.assert_called_once()
+        acked_ids = mock_ack.call_args.args[0]
+        self.assertEqual(set(acked_ids), {"id-1", "id-2"})
+
     def test_empty_warden_inbox_no_section_in_input(self) -> None:
         """warden inbox 空なら judgment_input に warden_inbox key を追加しない
         (= 既存挙動完全互換)。"""
@@ -1049,6 +1082,41 @@ class TestConductorJsonlLogging(unittest.TestCase):
         # judgment.result.status は fallback-error
         result_evt = [e for e in events if e["event"] == "judgment.result"][0]
         self.assertEqual(result_evt["status"], "fallback-error")
+
+    def test_warden_inbox_ack_emitted_on_fallback_no_key(self) -> None:
+        """#123: fallback-no-key 経路でも warden_inbox.ack 件が emit される
+        (= archive に移送した audit trail)。"""
+        fake_replies = [
+            {"msg_id": "id-k", "from": "a", "topic": "t", "body": "b"},
+        ]
+        snapshot_payload = {"minds": [{"mind_name": "alice"}]}
+        nexus_mock = MagicMock()
+        nexus_mock.ack_dispatch.return_value = {"ok": True}
+        with patch("conductor.write_snapshot") as mock_write, \
+             patch("conductor.load_snapshot") as mock_load, \
+             patch("conductor.make_client") as mock_make, \
+             patch("conductor._read_warden_inbox", return_value=fake_replies), \
+             patch.dict("sys.modules"):
+            mock_write.return_value = self.snapshots_dir / "fake.json"
+            mock_load.return_value = snapshot_payload
+            from judgment import AnthropicNotConfigured
+            mock_make.side_effect = AnthropicNotConfigured("no key")
+            fake_module = MagicMock()
+            fake_module.Nexus = MagicMock(return_value=nexus_mock)
+            sys.modules["storage"] = fake_module
+            run_one_cycle(
+                1, client=None,
+                issues_dir=self.issues_dir,
+                snapshots_dir=self.snapshots_dir,
+            )
+        events = self._read_events()
+        # warden_inbox.ack は出る (fallback-no-key でも ack するので)
+        acks = [e for e in events if e["event"] == "warden_inbox.ack"]
+        self.assertEqual(len(acks), 1)
+        self.assertEqual(acks[0]["msg_id"], "id-k")
+        # judgment.result.status は fallback-no-key
+        result_evt = [e for e in events if e["event"] == "judgment.result"][0]
+        self.assertEqual(result_evt["status"], "fallback-no-key")
 
     def test_multiple_cycles_append_to_same_file(self) -> None:
         """2 cycle 連続実行で同 jsonl に append される。"""
