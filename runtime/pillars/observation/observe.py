@@ -525,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     as_anomaly = "--anomaly" in argv
     as_for_warden = "--for-warden" in argv
     as_trace = "--trace" in argv
+    as_cost = "--cost" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
 
@@ -537,6 +538,16 @@ def main(argv: list[str] | None = None) -> int:
 
         since = _parse_str_option(argv, "--since")
         return cmd_trace(since=since)
+
+    # Phase 5g.B #172 chunk 2: --cost は mind_loop.cost event の per-Mind /
+    # per-day / per-model 集計。--mind / --since / --json と組み合わせ可。
+    if as_cost:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from cost import cmd_cost  # noqa: PLC0415
+
+        mind = _parse_str_option(argv, "--mind")
+        since = _parse_str_option(argv, "--since")
+        return cmd_cost(mind=mind, since=since, as_json=as_json)
 
     now_epoch = time.time()
 
