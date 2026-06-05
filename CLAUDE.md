@@ -99,7 +99,11 @@ PR を出す前の Reviewer 1 巡で、特に以下を厳しめに評価する:
 
   3. Issue → PR 完全フロー検証 (信頼境界 axiom) — **完了 (2026-06-03, run 7)**: ADR-0027 で信頼境界 axiom 確定 (#148)、implementer/reviewer Persona に L1 (#149)、setup.sh --pr-mode で workspace=developer-default 切替 (#150)、Persona "cd work/" 強化 (#152)、Issue body Step 3 仕様 (#153)。**run 7 で bob が実 PR #154 を作成**: `runtime/pillars/conduit/utils.py` + tests (95 passing)、PR body に「Trust boundary」section + ADR-0027 引用 (= 信頼境界の内面化を実証)、**人間 (= operator) が merge**。GitHub 側 L3 (branch protection on main、force/delete 禁止 + PR 経由必須) は operator が設定済。Step 3 完了基準 (= Mind 製 PR が main に取り込まれる) 達成。残課題: run 7 で carol が review 間に合わず (max_cycles=5 では Step 3 chain には短い) → max_cycles 増 or carol への nudge 改善は次回 dogfooding で対応。
   4. 失敗扱い整理 — **完了 (2026-06-04, run 8)**: ADR-0028 で operational mapping を ADR-0021 A/B/C 軸で再整理 (#155)。実装 chunk: per-cycle timeout (#156)、error event + streak (#157)、notify-human L1 logs/notify.jsonl (#158)、Persona「無限 dispatch 防止」(#159)。**run 8 で全機構が実機発火**: bob cycle 3-5 が 300s timeout で SIGTERM → streak=3 で auto_kill + critical notify、Persona §4.5 を bob が引用して bursting 抑制。残: **#160** (default timeout 300s が Step 3 PR-mode の bob cycle 平均 300-700s より厳しすぎ、600s 推奨、p2)。**Phase 5f 全 4 step 完了**、tracking #124 は close 検討可。
-- 完了基準: 「人間が Issue 投入 → 30 分放置 → PR が並ぶ → 人間が merge → 次の Issue へ」を 5 連続で事故なく回せる
+- **Phase 5f follow-up (2026-06-05)**: #160 timeout default 300→900s (#161)、#123 warden inbox ack-on-fallback-no-key (#162)、#134 diagnostic telemetry mind_loop.cycle_slow (#163) を merged。`#134` は依然 open (Phase 5g root cause 調査の anchor として残す)。
+- **Phase 5g = 「framework foundation v2 + 箱庭 v2」** (2026-06-05 設計): 2 Epic 並走:
+  - **5g.A: Framework foundation v2** (#164): primitive 完成度を上げて publish 可能に。5 子 issue: (1) Persona composition #166、(2) C 層 schema #167、(3) Org test harness #168、(4) Kind diversity #169、(5) Framework versioning #170。推奨順: schema → composition → test → versioning → Kind
+  - **5g.B: 箱庭 v2** (#165): 物理基盤 + 観察強化。6 新規 + 2 既存 = 子 7 + #134: (6) WSL/Linux 移行 #108、(7) Mindspace persistence #171、(8) cost meter #172、(9) L3 notify #173、(10) health view #174、(11) chain viz #175、#134 root cause RCA。推奨順: cost → L3 notify → health view → persistence → chain viz → WSL → #134 RCA
+- Phase 5f 完了基準: 「人間が Issue 投入 → 30 分放置 → PR が並ぶ → 人間が merge → 次の Issue へ」を 5 連続で事故なく回せる — **1 回成功 (run 7 PR #154)、5 連続証明は 5g 後の検証段に置く**
 
 ## 6. 新セッション開始時のお勧めワークフロー
 
