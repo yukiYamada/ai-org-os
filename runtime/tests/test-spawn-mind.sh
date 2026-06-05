@@ -127,9 +127,13 @@ assert_file_exists "Mindspace .mind-meta.md" "${mind_dir}/.mind-meta.md"
 assert_file_exists "Mindspace .mcp.json (Nexus 接続)" "${mind_dir}/.mcp.json"
 # Phase 5c-1 / ADR-0020: Persona は templates/personas/ から overlay 解決される。
 # AI_ORG_OS_HOME 配下に personas 実体が無ければ templates が fallback として使われる。
-assert_files_equal "CLAUDE.md == designer Persona (templates)" \
-  "${mind_dir}/CLAUDE.md" \
-  "${REPO_DIR}/templates/personas/designer.md"
+# Phase 5g.A #166: spawn-mind は `persona.py compose` で frontmatter mixins を
+# 解決した最終 markdown を CLAUDE.md に書く。元 designer Persona の本文 + mixins
+# の body が含まれることを確認 (byte-equal は composition が入ったので成立しない)。
+assert_file_contains "CLAUDE.md has Persona body" \
+  "${mind_dir}/CLAUDE.md" "# Persona: Designer"
+assert_file_contains "CLAUDE.md has mindspace-info mixin body" \
+  "${mind_dir}/CLAUDE.md" "あなたの Mindspace について"
 assert_file_contains "meta has mind_name" "${mind_dir}/.mind-meta.md" "mind_name: ${mind}"
 assert_file_contains "meta has kind" "${mind_dir}/.mind-meta.md" "kind: generic"
 assert_file_contains "meta has persona" "${mind_dir}/.mind-meta.md" "persona: designer"

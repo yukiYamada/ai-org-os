@@ -419,8 +419,15 @@ if [ "${WS_WANT_WORKTREE}" = "1" ]; then
   fi
 fi
 
-echo "[spawn-mind] Installing Persona '${PERSONA}' as CLAUDE.md"
-cp "${PERSONA_FILE}" "${MIND_DIR}/CLAUDE.md"
+echo "[spawn-mind] Installing Persona '${PERSONA}' as CLAUDE.md (composed with mixins)"
+# Phase 5g.A #166: persona.py compose で frontmatter の mixins: フィールドを
+# 解決して最終 markdown を作る。mixins 無し / Persona に mixins 未設定なら本文
+# そのまま (= 既存挙動と等価)。fail (mixin 不在等) は spawn を止める。
+if ! "${HOST_PYTHON_BIN}" "${PERSONA_PY}" compose "${PERSONA}" > "${MIND_DIR}/CLAUDE.md"; then
+  echo "[ERROR] Persona composition failed for '${PERSONA}'." >&2
+  echo "[HINT] Check mixins refs in Persona frontmatter (= templates/persona-mixins/<name>.md)" >&2
+  exit 2
+fi
 
 SPAWNED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 

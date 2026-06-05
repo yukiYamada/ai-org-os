@@ -27,6 +27,10 @@ from pathlib import Path
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _REQUIRED_KEYS = ("persona", "version", "status")
+# Phase 5g.A #166: composition primitive。frontmatter の `mixins: [a, b]` を
+# parse して、各 mixin を Persona body の末尾に append する。共通 section の
+# 重複 (信頼境界 / Mindspace 説明 / 等) を一箇所に集約できる。
+_MIXIN_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 class PersonaError(Exception):
@@ -206,6 +210,127 @@ def is_registered(name: str, personas_dir: Path | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5g.A #166: Composition (mixins)
+# ---------------------------------------------------------------------------
+
+
+def _home_mixins_dir() -> Path | None:
+    """利用者 mixin overlay (`$AI_ORG_OS_HOME/persona-mixins`)。"""
+    home = os.environ.get("AI_ORG_OS_HOME")
+    if home:
+        return Path(home) / "persona-mixins"
+    h = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if h:
+        return Path(h) / ".ai-org-os" / "persona-mixins"
+    return None
+
+
+def _template_mixins_dir() -> Path:
+    """同梱 mixin dir (`templates/persona-mixins`)。"""
+    return _TEMPLATES_DIR / "persona-mixins"
+
+
+def _search_mixin_dirs(mixins_dir: Path | None) -> list[Path]:
+    if mixins_dir is not None:
+        return [Path(mixins_dir)]
+    env = os.environ.get("AI_ORG_OS_PERSONA_MIXINS_DIR")
+    if env:
+        return [Path(env)]
+    dirs: list[Path] = []
+    home = _home_mixins_dir()
+    if home is not None and home.is_dir():
+        dirs.append(home)
+    dirs.append(_template_mixins_dir())
+    return dirs
+
+
+def _resolve_mixin(name: str, mixins_dir: Path | None) -> Path | None:
+    """mixin 名 → .md path。overlay shadow consistency に従う。"""
+    if not _MIXIN_VALID_NAME_RE.match(name):
+        return None
+    for source in _search_mixin_dirs(mixins_dir):
+        candidate = source / f"{name}.md"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _parse_yaml_list(value: str) -> tuple[str, ...]:
+    """`[a, b, c]` 形式の最小パーサ。guild.py と同じ流儀。"""
+    s = value.strip()
+    if not (s.startswith("[") and s.endswith("]")):
+        return (s,) if s else ()
+    inner = s[1:-1]
+    if not inner.strip():
+        return ()
+    items = [item.strip() for item in inner.split(",")]
+    return tuple(item for item in items if item)
+
+
+def _strip_frontmatter(text: str) -> str:
+    """先頭 `---\\n...\\n---\\n` を剥がす。frontmatter 無しならそのまま。"""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "\n".join(lines[i + 1 :])
+    # 閉じ無し → 剥がさない (= conservative)
+    return text
+
+
+def compose_persona(
+    name: str,
+    *,
+    personas_dir: Path | None = None,
+    mixins_dir: Path | None = None,
+) -> str:
+    """Persona の最終 markdown (= mixins を末尾に append したもの) を返す。
+
+    挙動:
+    - frontmatter の `mixins:` field を parse (= `[a, b, c]` 形式)
+    - 未指定 / 空なら persona 本文をそのまま返す (frontmatter 含む = spawn-mind
+      が CLAUDE.md として配置するため frontmatter ごと保持)
+    - mixin 不在は PersonaError (= silent fail せず spawn を止める)
+
+    Raises:
+        PersonaError: persona 不在 / mixin 不在 / persona 不正
+    """
+    info = get_persona(name, personas_dir=personas_dir)
+    if info is None:
+        raise PersonaError(f"persona '{name}' not registered or invalid")
+    text = info.path.read_text(encoding="utf-8")
+
+    # frontmatter から mixins を取得
+    fm = _parse_frontmatter(text)
+    mixins_raw = fm.get("mixins", "")
+    mixin_names = _parse_yaml_list(_strip_quotes(mixins_raw))
+
+    if not mixin_names:
+        # 互換: mixins 無し / 空 → 本文そのまま
+        return text
+
+    result = text.rstrip()
+    for m_name in mixin_names:
+        mixin_path = _resolve_mixin(m_name, mixins_dir)
+        if mixin_path is None:
+            raise PersonaError(
+                f"persona '{name}' references unknown mixin '{m_name}' "
+                f"(looked in persona-mixins/)"
+            )
+        try:
+            mixin_text = mixin_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise PersonaError(
+                f"persona '{name}': failed to read mixin '{m_name}' at {mixin_path}: {exc}"
+            ) from exc
+        mixin_body = _strip_frontmatter(mixin_text).strip()
+        if mixin_body:
+            result = result + "\n\n" + mixin_body
+    return result + "\n"
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -276,11 +401,32 @@ def _cmd_check(argv: list[str]) -> int:
     return 0
 
 
+def _cmd_compose(argv: list[str]) -> int:
+    """Persona body + mixins を合成して stdout に出力 (= spawn-mind が
+    CLAUDE.md に redirect する想定、Phase 5g.A #166)。"""
+    if not argv:
+        print("[ERROR] 'compose' requires a persona name", file=sys.stderr)
+        return 2
+    name = argv[0]
+    try:
+        # encoding 明示 (= 日本語等を含む persona を MSYS / cp932 で書き出さない)
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        composed = compose_persona(name)
+    except PersonaError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    print(composed, end="")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
-            "Usage: persona.py {list|get|check} [<name>] [--json]\n"
-            "Phase 5g.A #167: Persona Registry validator.",
+            "Usage: persona.py {list|get|check|compose} [<name>] [--json]\n"
+            "Phase 5g.A #167 (check/list/get) + #166 (compose).",
             file=sys.stderr,
         )
         return 2
@@ -292,6 +438,8 @@ def main(argv: list[str]) -> int:
         return _cmd_get(rest)
     if cmd == "check":
         return _cmd_check(rest)
+    if cmd == "compose":
+        return _cmd_compose(rest)
     print(f"[ERROR] unknown command: {cmd}", file=sys.stderr)
     return 2
 
