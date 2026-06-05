@@ -38,13 +38,38 @@
 #
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 <mind-name>" >&2
+# Phase 5g.B #171: --preserve オプションで Mindspace の state.md / notes/ を
+# $AI_ORG_OS_HOME/preserved/<mind>/ に保存してから kill する。再 spawn 時に
+# spawn-mind --restore-from で取り戻せる。古い preserved は新たに上書きされる
+# (= 1 Mind あたり 1 snapshot)。デフォルトは保存しない (= 既存挙動と同じ、
+# ADR-0011 Mindspace 不可侵原則のまま)。
+PRESERVE=0
+ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --preserve) PRESERVE=1; shift ;;
+    -h|--help)
+      cat <<HELP
+Usage: $0 [--preserve] <mind-name>
+
+Options:
+  --preserve   Copy Mindspace state.md + notes/ to
+               \$AI_ORG_OS_HOME/preserved/<mind-name>/ before deletion (Phase 5g.B #171).
+               spawn-mind --restore-from <path> で再起動時に復元可能。
+HELP
+      exit 0
+      ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [ "${#ARGS[@]}" -ne 1 ]; then
+  echo "Usage: $0 [--preserve] <mind-name>" >&2
   echo "Example: $0 my-first-mind" >&2
   exit 1
 fi
 
-MIND_NAME="$1"
+MIND_NAME="${ARGS[0]}"
 
 # MIND_NAME のバリデーション。spawn-mind.sh / mind-loop.sh の _VALID_NAME_RE と
 # 同じ規則。緩めるとパス traversal (../escape) で任意ディレクトリに rm -rf や
@@ -425,6 +450,33 @@ for dispatch_dir in "${CONDUIT_INBOX_DIR}" "${CONDUIT_ARCHIVE_DIR}"; do
     fi
   fi
 done
+
+# Phase 5g.B #171: --preserve なら state.md + notes/ を preserved/ へ保存。
+# Mindspace 全体ではなく state / notes のみ (= secrets / .mcp.json / Persona は
+# Persona ファイル / Workspace から再生成するべきもの)。古い preserved 上書き
+# (= 1 Mind あたり 1 snapshot)。失敗は WARN + 継続 (F3)。
+if [ "${PRESERVE}" = "1" ]; then
+  PRESERVE_DIR="${RUNTIME_HOME}/preserved/${MIND_NAME}"
+  if mkdir -p "${PRESERVE_DIR}" 2>/dev/null; then
+    rm -rf "${PRESERVE_DIR}"/* 2>/dev/null || true
+    if [ -f "${MIND_DIR}/state.md" ]; then
+      cp "${MIND_DIR}/state.md" "${PRESERVE_DIR}/state.md" 2>/dev/null \
+        && echo "[preserve] state.md -> ${PRESERVE_DIR}/state.md" \
+        || echo "[preserve] WARN: copy state.md failed" >&2
+    fi
+    if [ -d "${MIND_DIR}/notes" ]; then
+      cp -R "${MIND_DIR}/notes" "${PRESERVE_DIR}/notes" 2>/dev/null \
+        && echo "[preserve] notes/ -> ${PRESERVE_DIR}/notes/" \
+        || echo "[preserve] WARN: copy notes/ failed" >&2
+    fi
+    # metadata (= 再 spawn 時に operator が persona/guild/workspace を選べる hint)
+    printf '{"preserved_at":"%s","mind_name":"%s"}\n' \
+      "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${MIND_NAME}" \
+      > "${PRESERVE_DIR}/preserved-meta.json" 2>/dev/null || true
+  else
+    echo "[preserve] WARN: mkdir failed ${PRESERVE_DIR}, skipping preserve" >&2
+  fi
+fi
 
 echo "[kill-mind] Destroying Mindspace at ${MIND_DIR}"
 # #133: 子孫プロセスのファイルハンドル保持で rm -rf が失敗するケースに備え、
