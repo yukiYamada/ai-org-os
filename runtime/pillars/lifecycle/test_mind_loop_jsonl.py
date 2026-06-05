@@ -809,6 +809,105 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
             json.loads(line)  # parse 失敗で test fail
 
 
+@unittest.skipUnless(_bash_available(), "bash required")
+class TestMindLoopSlowCycle(unittest.TestCase):
+    """Phase 5g prep / #134: slow-cycle 診断 telemetry。
+
+    RC=0 (正常終了) で duration >= threshold の cycle に mind_loop.cycle_slow
+    event を emit。RC != 0 (timeout / error) は別 event で既に flag されているため
+    二重 emit しない。threshold=0 で機能無効化。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        # 3s sleep → exit 0 (= "slow but clean" cycle、#134 signature)
+        self.slow_ok_stub = self.tmp / "slow-ok-stub"
+        self.slow_ok_stub.write_text(
+            "#!/usr/bin/env bash\nsleep 3\nexit 0\n", encoding="utf-8"
+        )
+        self.slow_ok_stub.chmod(0o755)
+        # 即 exit 0 (= "fast" cycle)
+        self.fast_ok_stub = self.tmp / "fast-ok-stub"
+        self.fast_ok_stub.write_text(
+            "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+        )
+        self.fast_ok_stub.chmod(0o755)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _read_events(self) -> list[dict]:
+        if not self.event_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.event_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run(self, *, stub: Path, threshold_s: int, timeout_s: int = 0, max_cycles: int = 1) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(stub)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = str(max_cycles)
+        env["AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT"] = str(timeout_s)
+        env["AI_ORG_OS_MIND_LOOP_SLOW_THRESHOLD_S"] = str(threshold_s)
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+
+    def test_slow_event_emitted_when_duration_exceeds_threshold(self) -> None:
+        """stub が 3s sleep + RC=0、threshold=2 → mind_loop.cycle_slow が 1 件 emit。"""
+        self._run(stub=self.slow_ok_stub, threshold_s=2)
+        events = self._read_events()
+        slows = [e for e in events if e["event"] == "mind_loop.cycle_slow"]
+        self.assertEqual(len(slows), 1)
+        self.assertEqual(slows[0]["cycle"], 1)
+        self.assertGreaterEqual(slows[0]["duration_s"], 2)
+        self.assertEqual(slows[0]["threshold_s"], 2)
+
+    def test_slow_event_not_emitted_below_threshold(self) -> None:
+        """fast stub (即 exit) + threshold=10 → cycle_slow 不発火。"""
+        self._run(stub=self.fast_ok_stub, threshold_s=10)
+        events = self._read_events()
+        slows = [e for e in events if e["event"] == "mind_loop.cycle_slow"]
+        self.assertEqual(slows, [])
+
+    def test_slow_event_disabled_when_threshold_zero(self) -> None:
+        """threshold=0 → 機能無効化。slow stub でも cycle_slow event は出ない。"""
+        self._run(stub=self.slow_ok_stub, threshold_s=0)
+        events = self._read_events()
+        slows = [e for e in events if e["event"] == "mind_loop.cycle_slow"]
+        self.assertEqual(slows, [])
+
+    def test_slow_event_not_emitted_on_timeout(self) -> None:
+        """sleep 60 + timeout=2 (RC=124/137) + threshold=1 → cycle_slow 不発火
+        (timeout は別 event で既に flag されている、二重 emit しない)。"""
+        slow_hang_stub = self.tmp / "slow-hang-stub"
+        slow_hang_stub.write_text(
+            "#!/usr/bin/env bash\nsleep 60\nexit 0\n", encoding="utf-8"
+        )
+        slow_hang_stub.chmod(0o755)
+        self._run(stub=slow_hang_stub, threshold_s=1, timeout_s=2)
+        events = self._read_events()
+        # timeout event は出る
+        timeouts = [e for e in events if e["event"] == "mind_loop.timeout"]
+        self.assertEqual(len(timeouts), 1)
+        # cycle_slow は出ない (RC != 0 のため)
+        slows = [e for e in events if e["event"] == "mind_loop.cycle_slow"]
+        self.assertEqual(slows, [])
+
+
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
     bash subprocess を回さないので速い。

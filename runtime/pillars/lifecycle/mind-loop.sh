@@ -76,6 +76,15 @@ CYCLE_TIMEOUT_STREAK_MAX="${AI_ORG_OS_MIND_LOOP_TIMEOUT_STREAK:-3}"
 # 介入対象であり、自動 kill すると forensics が失われるため。
 CYCLE_ERROR_STREAK_MAX="${AI_ORG_OS_MIND_LOOP_ERROR_STREAK:-5}"
 
+# Phase 5g prep / #134: slow-cycle 診断 threshold。
+# RC=0 (= timeout / error ではない、正常終了) で duration >= 本値 (秒) の cycle が
+# 発生したら mind_loop.cycle_slow event を emit する。auto-kill / notify-human は
+# 起こさず、純粋に「あとから observe.py --trace で outlier を眼で追えるようにする」
+# 観察用 telemetry。0 = 無効化。default 300s = "5 分超え" の cycle (= 通常 Step 2
+# cycle 50-200s の 2-3x、CYCLE_TIMEOUT=900s の 1/3) を outlier として記録。
+# 注: Step 3 PR-mode (cycle 300-1000s が legit) では env で 600 等に上げる想定。
+CYCLE_SLOW_THRESHOLD_S="${AI_ORG_OS_MIND_LOOP_SLOW_THRESHOLD_S:-300}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --period)
@@ -116,6 +125,10 @@ if ! [[ "${CYCLE_TIMEOUT_STREAK_MAX}" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "${CYCLE_ERROR_STREAK_MAX}" =~ ^[0-9]+$ ]]; then
   echo "[ERROR] AI_ORG_OS_MIND_LOOP_ERROR_STREAK must be non-negative integer (got '${CYCLE_ERROR_STREAK_MAX}')" >&2
+  exit 1
+fi
+if ! [[ "${CYCLE_SLOW_THRESHOLD_S}" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] AI_ORG_OS_MIND_LOOP_SLOW_THRESHOLD_S must be non-negative integer (got '${CYCLE_SLOW_THRESHOLD_S}')" >&2
   exit 1
 fi
 
@@ -478,6 +491,16 @@ while :; do
   fi
   _mindloop_emit_event "mind_loop.end" \
     ",\"cycle\":${CYCLE},\"exit_code\":${RC},\"duration_s\":${DURATION_S}"
+
+  # Phase 5g prep / #134: slow-cycle 診断 telemetry。
+  # RC=0 (= normal exit、timeout/error ではない) で duration が threshold を超えた
+  # cycle を marker として記録する。auto-kill / notify は起こさず純粋に observe.py
+  # --trace 用の見える化。timeout/error は別 event で既に flag されているため
+  # 二重 emit しない。CYCLE_SLOW_THRESHOLD_S=0 で機能無効化。
+  if [ "${CYCLE_SLOW_THRESHOLD_S}" -gt 0 ] && [ "${RC}" = "0" ] && [ "${DURATION_S}" -ge "${CYCLE_SLOW_THRESHOLD_S}" ]; then
+    _mindloop_emit_event "mind_loop.cycle_slow" \
+      ",\"cycle\":${CYCLE},\"duration_s\":${DURATION_S},\"threshold_s\":${CYCLE_SLOW_THRESHOLD_S}"
+  fi
 
   # ADR-0028 §2.1: streak 上限到達で Mind を auto-kill (= ADR-0013 Kill 段階)。
   # 0 ならこの機能は無効 (= 永続させる、operator が手で kill する想定)。
