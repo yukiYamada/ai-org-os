@@ -110,7 +110,9 @@ class CycleResult:
     dispatches_sent: int = 0
     # Phase 5e Step D / ADR-0025: warden 宛 reply の取り込み件数。
     # *_read = 今 cycle で Judgment 入力に渡した件数 (= Conductor が見た声)
-    # *_acked = Judgment 成功後に archive へ移した件数 (= fallback では 0)
+    # *_acked = archive へ移した件数。status="ok" (Judgment 成功) と
+    #          status="fallback-no-key" (key 不在で回復不能、#123) で >0、
+    #          status="fallback-error" (一時失敗) では 0 (次 cycle で再読込)。
     warden_replies_read: int = 0
     warden_replies_acked: int = 0
 
@@ -590,12 +592,16 @@ def run_one_cycle(
     # ので、actuator は judgment_status="ok" のときだけ実質動く。
     dispatches_sent = _actuate_dispatches(judgments, cycle_number)
 
-    # ---- step 6: warden_inbox ack (Phase 5e Step D / ADR-0025)
-    # Judgment 呼び出しが成功 (status="ok") した場合のみ、読んだ reply を
-    # archive に移す (at-least-once 配送: fallback 系では ack しないので次
-    # cycle で再読み込みされる)。
+    # ---- step 6: warden_inbox ack (Phase 5e Step D / ADR-0025, refined by #123)
+    # 2 つのケースで ack する:
+    #   - status="ok": Judgment が消費した → 正規の archive 移送
+    #   - status="fallback-no-key": Judgment Pillar 機能なし (API key 不在) で
+    #     回復不能。retry には意味が無く inbox に滞留させると無限蓄積する (#123)。
+    #     「Judgment が読まない宣言」と等価扱いで archive 移送する。
+    # status="fallback-error" (= 一時的失敗) のみ at-least-once を維持し ack せず、
+    # 次 cycle で再読込される。
     warden_replies_acked = 0
-    if judgment_status == "ok" and warden_replies:
+    if judgment_status in ("ok", "fallback-no-key") and warden_replies:
         msg_ids = [r["msg_id"] for r in warden_replies if r.get("msg_id")]
         warden_replies_acked = _ack_warden_inbox(msg_ids, cycle_number)
 
