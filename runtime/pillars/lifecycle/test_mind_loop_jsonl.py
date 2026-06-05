@@ -908,6 +908,142 @@ class TestMindLoopSlowCycle(unittest.TestCase):
         self.assertEqual(slows, [])
 
 
+@unittest.skipUnless(_bash_available(), "bash required")
+class TestMindLoopCost(unittest.TestCase):
+    """Phase 5g.B #172 chunk 1: claude --output-format json から cost を capture
+    し mind_loop.cost event を emit。
+
+    stub claude が claude の result JSON を stdout に出して exit する形式で
+    invocation 経路を模す。stderr は LOG_FILE へ、stdout は per-cycle JSON file
+    に書かれ、_parse_cost.py が読む。
+    """
+
+    SAMPLE_JSON = (
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"ok-test-result",'
+        '"total_cost_usd":0.0123,"duration_api_ms":1234,"num_turns":2,'
+        '"usage":{"input_tokens":100,"output_tokens":50,'
+        '"cache_creation_input_tokens":1000,"cache_read_input_tokens":2000},'
+        '"modelUsage":{"claude-opus-test":{"costUSD":0.0123}},'
+        '"session_id":"test-session-id"}'
+    )
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.home = self.tmp / "ai-org-os-home"
+        self.home.mkdir()
+        (self.home / "config.env").write_text("", encoding="utf-8")
+        self.mind_name = "alice"
+        self.mind_dir = self.home / "minds" / self.mind_name
+        self.mind_dir.mkdir(parents=True)
+        self.event_log = self.home / "logs" / "minds" / self.mind_name / "mind-loop.jsonl"
+        self.log_file = self.mind_dir / "mind-loop.log"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _make_stub(self, name: str, body: str) -> Path:
+        stub = self.tmp / name
+        stub.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+        stub.chmod(0o755)
+        return stub
+
+    def _read_events(self) -> list[dict]:
+        if not self.event_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.event_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def _run(self, stub: Path, timeout_s: int = 0, max_cycles: int = 1) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(stub)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = str(max_cycles)
+        env["AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT"] = str(timeout_s)
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+
+    def test_cost_event_emitted_on_happy_path(self) -> None:
+        """stub が claude JSON を出力 → mind_loop.cost event が emit され、
+        result text が LOG_FILE に追記される。"""
+        body = (
+            "cat <<'JSON'\n"
+            f"{self.SAMPLE_JSON}\n"
+            "JSON\n"
+            "exit 0"
+        )
+        stub = self._make_stub("json-ok-stub", body)
+        self._run(stub)
+        events = self._read_events()
+        costs = [e for e in events if e["event"] == "mind_loop.cost"]
+        self.assertEqual(len(costs), 1, f"expected 1 cost event, got events={events}")
+        c = costs[0]
+        self.assertEqual(c["mind"], self.mind_name)
+        self.assertEqual(c["cycle"], 1)
+        self.assertAlmostEqual(c["cost_usd"], 0.0123, places=6)
+        self.assertEqual(c["duration_api_ms"], 1234)
+        self.assertEqual(c["num_turns"], 2)
+        self.assertEqual(c["tokens"]["input"], 100)
+        self.assertEqual(c["tokens"]["output"], 50)
+        self.assertEqual(c["tokens"]["cache_creation"], 1000)
+        self.assertEqual(c["tokens"]["cache_read"], 2000)
+        self.assertEqual(c["models"], {"claude-opus-test": 0.0123})
+        self.assertEqual(c["session_id"], "test-session-id")
+        self.assertFalse(c["is_error"])
+        # result text が LOG_FILE に書かれている
+        log_text = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("ok-test-result", log_text)
+
+    def test_cost_event_carries_is_error_flag(self) -> None:
+        """claude が is_error: true を返した場合も cost event は出る (= 課金は発生)。"""
+        sample = self.SAMPLE_JSON.replace('"is_error":false', '"is_error":true')
+        body = (
+            "cat <<'JSON'\n"
+            f"{sample}\n"
+            "JSON\n"
+            "exit 0"
+        )
+        stub = self._make_stub("json-error-flag-stub", body)
+        self._run(stub)
+        costs = [e for e in self._read_events() if e["event"] == "mind_loop.cost"]
+        self.assertEqual(len(costs), 1)
+        self.assertTrue(costs[0]["is_error"])
+
+    def test_no_cost_event_on_malformed_json(self) -> None:
+        """JSON parse 不能な出力 (= claude crashed 等) では cost event が出ない。
+        Realm を止めず loop は続く。"""
+        body = (
+            "echo 'not valid json {{'\n"
+            "exit 0"
+        )
+        stub = self._make_stub("json-malformed-stub", body)
+        result = self._run(stub)
+        self.assertEqual(result.returncode, 0)
+        costs = [e for e in self._read_events() if e["event"] == "mind_loop.cost"]
+        self.assertEqual(costs, [])
+
+    def test_no_cost_event_on_empty_output(self) -> None:
+        """stub stdout が空 (= 既存 ok stub と同じ) → cost event なし、event log は
+        他 event (start/end) のみ持つ。"""
+        stub = self._make_stub("json-empty-stub", "exit 0")
+        self._run(stub)
+        events = self._read_events()
+        costs = [e for e in events if e["event"] == "mind_loop.cost"]
+        self.assertEqual(costs, [])
+        # 既存 event 経路は壊れていない (mind_loop.start / mind_loop.end は出る)
+        starts = [e for e in events if e["event"] == "mind_loop.start"]
+        ends = [e for e in events if e["event"] == "mind_loop.end"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(len(ends), 1)
+
+
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。
     bash subprocess を回さないので速い。

@@ -280,6 +280,10 @@ trap on_signal TERM INT
 
 EVENT_LOGS_DIR="${RUNTIME_HOME}/logs/minds/${MIND_NAME}"
 EVENT_LOG_FILE="${EVENT_LOGS_DIR}/mind-loop.jsonl"
+# Phase 5g.B #172: 各 cycle の claude `--output-format json` 出力を per-cycle
+# JSON file として保存。`_parse_cost.py` が読んで mind_loop.cost event を emit、
+# result text を LOG_FILE に追記する。retention policy は将来 (#172 chunk 2+)。
+CYCLES_JSON_DIR="${EVENT_LOGS_DIR}/cycles"
 
 _mindloop_iso_ms() {
   local ts
@@ -420,25 +424,39 @@ while :; do
     PROMPT="cycle ${CYCLE} for mind ${MIND_NAME}. INBOX: ${PEEK_SUMMARY}. Check inbox via Nexus and act per your Persona."
   fi
 
-  # claude をブロッキング呼び出し。標準出力 / エラーをログに混ぜる。
+  # claude をブロッキング呼び出し。
+  # Phase 5g.B #172: --output-format json を渡し、stdout を per-cycle JSON file へ、
+  # stderr を LOG_FILE へ split する。JSON parse 後に cost event emit + result
+  # text を LOG_FILE 追記する形にして、人間が眼で grep する従来体験を維持。
   # CLAUDE.md (Persona) と .mcp.json (Nexus) は Mindspace 内に置かれているので、
   # cwd を Mindspace にすれば自動的に読まれる。
   # Phase 5f Step 4.2 / ADR-0028 §2.1: CYCLE_TIMEOUT > 0 なら GNU coreutils
   # `timeout --kill-after=10` で wrap。SIGTERM 後 10 秒猶予→ SIGKILL。
+  mkdir -p "${CYCLES_JSON_DIR}" 2>/dev/null || true
+  CYCLE_JSON_FILE="${CYCLES_JSON_DIR}/cycle-$(printf '%05d' "${CYCLE}").json"
   set +e
   if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
     (
       cd "${MIND_DIR}"
-      "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" "${CLAUDE_BIN}" -p "${PROMPT}" 2>&1
-    ) >> "${LOG_FILE}"
+      "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
+    ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
   else
     (
       cd "${MIND_DIR}"
-      "${CLAUDE_BIN}" -p "${PROMPT}" 2>&1
-    ) >> "${LOG_FILE}"
+      "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
+    ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
   fi
   RC=$?
   set -e
+
+  # Phase 5g.B #172 chunk 1: cycle JSON を parser に渡して cost event を emit、
+  # result text を LOG_FILE に追記。parser は silent fail (= JSON 不正 / 空 /
+  # timeout で truncate 等は cost event なし、LOG_FILE には追記なし)。
+  if [ -s "${CYCLE_JSON_FILE}" ]; then
+    "${PEEK_PYTHON_BIN}" "${SCRIPT_DIR}/_parse_cost.py" \
+      "${CYCLE_JSON_FILE}" "${MIND_NAME}" "${CYCLE}" "${EVENT_LOG_FILE}" \
+      >> "${LOG_FILE}" 2>/dev/null || true
+  fi
 
   FINISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   END_EPOCH="$(date -u +%s)"
