@@ -288,6 +288,24 @@ if ! "${HOST_PYTHON_BIN}" "${REGISTRY_PY}" check "${KIND}"; then
   exit 2
 fi
 
+# Phase 5g.A #167: Persona frontmatter 検証 (= persona / version / status の
+# 必須キー + filename と一致)。Kind / Guild / Workspace と同じ流儀で Registry
+# Pillar に委譲。malformed frontmatter / typo を spawn 前に reject。
+PERSONA_PY="${RUNTIME_DIR}/pillars/registry/persona.py"
+if [ ! -f "${PERSONA_PY}" ]; then
+  echo "[ERROR] persona.py not found at ${PERSONA_PY}" >&2
+  echo "[HINT] Phase 5g.A implementation may be incomplete; please reinstall ai-org-os." >&2
+  exit 10
+fi
+echo "[spawn-mind] Verifying Persona registration via Registry Pillar: ${PERSONA}"
+if ! "${HOST_PYTHON_BIN}" "${PERSONA_PY}" check "${PERSONA}"; then
+  echo "[ERROR] Persona '${PERSONA}' is not registered (or its overlay file is malformed)." >&2
+  echo "[HINT] List registered Personas: ${HOST_PYTHON_BIN} ${PERSONA_PY} list" >&2
+  echo "[HINT] Inspect Persona:           ${HOST_PYTHON_BIN} ${PERSONA_PY} get ${PERSONA}" >&2
+  echo "[HINT] If you edited \$AI_ORG_OS_HOME/personas/${PERSONA}.md, verify its frontmatter." >&2
+  exit 2
+fi
+
 # Phase 5c-1 (#87 / ADR-0019): Guild membership 検証。
 # 指定 Guild の manifest.md に kind / persona が含まれていなければ spawn を拒否。
 # guild.py は Registry Pillar 配下にあり、framework のみ参照 (mutable state を読まない)。
