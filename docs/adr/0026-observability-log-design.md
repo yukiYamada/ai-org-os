@@ -142,9 +142,12 @@ $AI_ORG_OS_HOME/logs/
 {"ts":"...", "event":"mind_loop.error", "actor":"alice", "cycle":N, "exit_code":2, "streak":1}
 {"ts":"...", "event":"mind_loop.cycle_slow", "actor":"alice", "cycle":N, "duration_s":420, "threshold_s":300}
 {"ts":"...", "event":"mind_loop.cost", "mind":"alice", "cycle":N, "cost_usd":0.012, "duration_api_ms":2641, "num_turns":2, "tokens":{"input":100,"output":50,"cache_creation":1000,"cache_read":2000}, "models":{"claude-opus-4-7[1m]":0.011}, "session_id":"...", "is_error":false}
+{"ts":"...", "event":"mind_loop.cost_warn", "mind":"alice", "cycle":N, "cost_usd":0.50, "threshold_usd":0.10}
 ```
 
-bash 側で append する（python に渡さなくていい単純 echo）。実装容易性のため。**例外**: `mind_loop.cost` のみ Python helper `_parse_cost.py` で emit する (= claude `--output-format json` の構造を bash で安全に parse できないため)。Helper は cost event を append し、`result` text を stdout 経由で mind-loop.sh 側に渡す。parse 失敗 (= JSON 不正 / timeout で truncate 等) は silent skip = cost event なし (= ADR-0013 §1 F3 準拠)。
+bash 側で append する（python に渡さなくていい単純 echo）。実装容易性のため。**例外**: `mind_loop.cost` / `mind_loop.cost_warn` のみ Python helper `_parse_cost.py` で emit する (= claude `--output-format json` の構造を bash で安全に parse できないため)。Helper は cost event を append し、`result` text を stdout 経由で mind-loop.sh 側に渡す。parse 失敗 (= JSON 不正 / timeout で truncate 等) は silent skip = cost event なし (= ADR-0013 §1 F3 準拠)。
+
+`mind_loop.cost_warn` は env `AI_ORG_OS_COST_WARN_USD` (正の浮動小数点) が設定されており、当該 cycle の `cost_usd >= threshold` の場合に emit する追加 event。同時に notify-human L1 (`logs/notify.jsonl`、ADR-0028 §2.3) に severity="warning" entry が書かれる。閾値未満 / env 未設定では emit なし。
 
 ### 5. 書き込み失敗は cycle を止めない（ADR-0013 F3 準拠）
 

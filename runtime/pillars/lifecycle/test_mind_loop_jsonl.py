@@ -1043,6 +1043,91 @@ class TestMindLoopCost(unittest.TestCase):
         self.assertEqual(len(starts), 1)
         self.assertEqual(len(ends), 1)
 
+    def _run_with_threshold(self, stub: Path, threshold_usd: str) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["AI_ORG_OS_HOME"] = str(self.home)
+        env["AI_ORG_OS_CLAUDE_BIN"] = str(stub)
+        env["AI_ORG_OS_LOOP_PERIOD"] = "0"
+        env["AI_ORG_OS_LOOP_MAX_CYCLES"] = "1"
+        env["AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT"] = "0"
+        env["AI_ORG_OS_COST_WARN_USD"] = threshold_usd
+        return subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+
+    def test_cost_warn_event_emitted_when_threshold_exceeded(self) -> None:
+        """Chunk 3 (#172): cost が threshold を超えると mind_loop.cost_warn event が
+        emit され、notify.jsonl に warning entry が書かれる。"""
+        # sample JSON は cost_usd=0.0123 → threshold=0.001 で必ず超過
+        body = (
+            "cat <<'JSON'\n"
+            f"{self.SAMPLE_JSON}\n"
+            "JSON\n"
+            "exit 0"
+        )
+        stub = self._make_stub("cost-warn-stub", body)
+        self._run_with_threshold(stub, "0.001")
+        events = self._read_events()
+        # cost event も warn event も両方出る
+        costs = [e for e in events if e["event"] == "mind_loop.cost"]
+        warns = [e for e in events if e["event"] == "mind_loop.cost_warn"]
+        self.assertEqual(len(costs), 1)
+        self.assertEqual(len(warns), 1)
+        w = warns[0]
+        self.assertEqual(w["mind"], self.mind_name)
+        self.assertEqual(w["cycle"], 1)
+        self.assertAlmostEqual(w["cost_usd"], 0.0123, places=6)
+        self.assertAlmostEqual(w["threshold_usd"], 0.001, places=6)
+        # notify-human L1: logs/notify.jsonl に entry あり
+        notify_log = self.home / "logs" / "notify.jsonl"
+        self.assertTrue(notify_log.exists(), "notify.jsonl should exist")
+        lines = [line for line in notify_log.read_text(encoding="utf-8").splitlines() if line]
+        self.assertEqual(len(lines), 1)
+        entry = json.loads(lines[0])
+        self.assertEqual(entry["event"], "mind_loop.cost_warn")
+        # notify.jsonl schema (ADR-0028 §2.3) uses `actor` for mind name
+        self.assertEqual(entry["actor"], self.mind_name)
+        self.assertEqual(entry["severity"], "warning")
+        self.assertEqual(entry["cycle"], 1)
+
+    def test_no_cost_warn_when_below_threshold(self) -> None:
+        """cost が threshold 未満なら warn event も notify も出ない。"""
+        body = (
+            "cat <<'JSON'\n"
+            f"{self.SAMPLE_JSON}\n"
+            "JSON\n"
+            "exit 0"
+        )
+        stub = self._make_stub("cost-below-stub", body)
+        # sample cost_usd=0.0123 < threshold 1.0
+        self._run_with_threshold(stub, "1.0")
+        events = self._read_events()
+        warns = [e for e in events if e["event"] == "mind_loop.cost_warn"]
+        self.assertEqual(warns, [])
+        notify_log = self.home / "logs" / "notify.jsonl"
+        if notify_log.exists():
+            lines = [line for line in notify_log.read_text(encoding="utf-8").splitlines() if line]
+            self.assertEqual(lines, [])
+
+    def test_no_cost_warn_when_threshold_disabled(self) -> None:
+        """AI_ORG_OS_COST_WARN_USD=0 (= default) なら、cost が高くても warn なし。"""
+        body = (
+            "cat <<'JSON'\n"
+            f"{self.SAMPLE_JSON}\n"
+            "JSON\n"
+            "exit 0"
+        )
+        stub = self._make_stub("cost-zero-stub", body)
+        self._run_with_threshold(stub, "0")
+        events = self._read_events()
+        # cost event は出る
+        costs = [e for e in events if e["event"] == "mind_loop.cost"]
+        self.assertEqual(len(costs), 1)
+        # warn event は出ない
+        warns = [e for e in events if e["event"] == "mind_loop.cost_warn"]
+        self.assertEqual(warns, [])
+
 
 class TestPeekInboxUnit(unittest.TestCase):
     """peek_inbox.py の pure helper (_truncate / _summarize) を単体テスト。

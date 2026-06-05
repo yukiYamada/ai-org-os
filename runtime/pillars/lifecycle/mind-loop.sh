@@ -452,10 +452,23 @@ while :; do
   # Phase 5g.B #172 chunk 1: cycle JSON を parser に渡して cost event を emit、
   # result text を LOG_FILE に追記。parser は silent fail (= JSON 不正 / 空 /
   # timeout で truncate 等は cost event なし、LOG_FILE には追記なし)。
+  # Chunk 3 (#172): parser が exit 10 を返したら (= AI_ORG_OS_COST_WARN_USD
+  # threshold 超過)、_mindloop_notify L1 (logs/notify.jsonl) に warning を
+  # 書き込む。詳細 (cost_usd / threshold_usd) は event_log の mind_loop.cost_warn
+  # に既に書かれているので、notify は cycle 参照のみ。
+  COST_RC=0
   if [ -s "${CYCLE_JSON_FILE}" ]; then
+    set +e
     "${PEEK_PYTHON_BIN}" "${SCRIPT_DIR}/_parse_cost.py" \
       "${CYCLE_JSON_FILE}" "${MIND_NAME}" "${CYCLE}" "${EVENT_LOG_FILE}" \
-      >> "${LOG_FILE}" 2>/dev/null || true
+      >> "${LOG_FILE}" 2>/dev/null
+    COST_RC=$?
+    set -e
+  fi
+  if [ "${COST_RC}" = "10" ]; then
+    _mindloop_notify "warning" "mind_loop.cost_warn" \
+      "cycle cost exceeded AI_ORG_OS_COST_WARN_USD threshold" \
+      ",\"cycle\":${CYCLE}"
   fi
 
   FINISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
