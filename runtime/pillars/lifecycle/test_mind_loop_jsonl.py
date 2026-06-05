@@ -723,6 +723,7 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
         subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
         self.assertEqual(self._read_notify(), [])
 
@@ -741,6 +742,7 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
         subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
         notify = self._read_notify()
         self.assertGreaterEqual(len(notify), 1)
@@ -772,6 +774,7 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
         )
         # auto-kill で exit 5
         self.assertEqual(result.returncode, 5)
@@ -800,6 +803,7 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
         subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
         raw = self.notify_log.read_text(encoding="utf-8")
         lines = [line for line in raw.splitlines() if line]
@@ -807,6 +811,82 @@ class TestMindLoopNotifyHuman(unittest.TestCase):
         self.assertEqual(len(lines), 3)
         for line in lines:
             json.loads(line)  # parse 失敗で test fail
+
+    def test_l3_notify_cmd_invoked_with_json_payload(self) -> None:
+        """Phase 5g.B #173: AI_ORG_OS_NOTIFY_CMD が set されていると、L1 file write 後に
+        shell コマンドが fork され、JSON payload が stdin で渡る。"""
+        stub = self._make_stub("#!/usr/bin/env bash\nexit 2\n")
+        # L3 cmd: stdin の JSON を sink file へ書き出す (= 受信検証)。
+        # MSYS bash で動かすため POSIX 形式 path を quote 付きで渡す
+        # (Windows 'C:\\...' は backslash escape として壊れる)。
+        sink = self.tmp / "l3-sink.jsonl"
+        notify_cmd = f"cat >> '{sink.as_posix()}'"
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="1",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="0",
+            AI_ORG_OS_MIND_LOOP_ERROR_STREAK="1",
+            AI_ORG_OS_NOTIFY_CMD=notify_cmd,
+        )
+        subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
+        )
+        # L1: notify.jsonl 1 件
+        notify = self._read_notify()
+        self.assertEqual(len(notify), 1)
+        # L3 は fire-and-forget background fork なので、mind-loop 完了後にも
+        # sink への書き込みが完了するまで少し待つ。5s 以内に書かれるはず。
+        import time as _t
+        deadline = _t.time() + 5
+        while _t.time() < deadline and not sink.exists():
+            _t.sleep(0.1)
+        self.assertTrue(sink.exists(), "L3 sink should be created by notify_cmd (within 5s)")
+        sink_lines = [line for line in sink.read_text(encoding="utf-8").splitlines() if line]
+        self.assertEqual(len(sink_lines), 1)
+        entry = json.loads(sink_lines[0])
+        self.assertEqual(entry["actor"], "alice")
+        self.assertEqual(entry["severity"], "warning")
+        self.assertEqual(entry["source"], "mind-loop")
+
+    def test_l3_notify_cmd_not_invoked_when_env_unset(self) -> None:
+        """AI_ORG_OS_NOTIFY_CMD 未設定 → L3 fork は起こらない (= L1 のみ)。"""
+        stub = self._make_stub("#!/usr/bin/env bash\nexit 2\n")
+        sink = self.tmp / "l3-sink.jsonl"
+        env = os.environ.copy()
+        env.update(
+            AI_ORG_OS_HOME=str(self.home),
+            AI_ORG_OS_CLAUDE_BIN=str(stub),
+            AI_ORG_OS_LOOP_PERIOD="0",
+            AI_ORG_OS_LOOP_MAX_CYCLES="1",
+            AI_ORG_OS_MIND_LOOP_CYCLE_TIMEOUT="0",
+            AI_ORG_OS_MIND_LOOP_ERROR_STREAK="1",
+        )
+        # env から AI_ORG_OS_NOTIFY_CMD を確実に除去
+        env.pop("AI_ORG_OS_NOTIFY_CMD", None)
+        subprocess.run(
+            ["bash", str(MIND_LOOP_SH), self.mind_name],
+            env=env, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
+        )
+        # L1 は出る、L3 sink は作られない
+        self.assertEqual(len(self._read_notify()), 1)
+        self.assertFalse(sink.exists())
+
+    # L3 hang シナリオ (= cmd が `sleep 30` 等で長時間応答せず、mind-loop が
+    # 待たないことを elapsed で確認する test) は **Windows MSYS の制約** で
+    # 信頼できる test が書けないため落とした:
+    #   - background fork + disown でも grandchild process (= sleep) が SIGTERM
+    #     を受け取らず生き残る (MSYS bash の signal propagation 制約)
+    #   - subprocess.run が孤児 sleep の stdout/stderr 継承で wait が解けない
+    # 本旨環境 (Linux/Docker、ADR-0001) では _mindloop_notify の background
+    # fork + GNU timeout で正しく cut off される (manual repro: 5s で sleep 30
+    # 殺害確認)。Linux CI で同じ env を再現可能。Phase 5g.B 移行 (#108) 後に
+    # 再導入候補。
 
 
 @unittest.skipUnless(_bash_available(), "bash required")
@@ -864,6 +944,7 @@ class TestMindLoopSlowCycle(unittest.TestCase):
         return subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
         )
 
     def test_slow_event_emitted_when_duration_exceeds_threshold(self) -> None:
@@ -968,6 +1049,7 @@ class TestMindLoopCost(unittest.TestCase):
         return subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
         )
 
     def test_cost_event_emitted_on_happy_path(self) -> None:
@@ -1054,6 +1136,7 @@ class TestMindLoopCost(unittest.TestCase):
         return subprocess.run(
             ["bash", str(MIND_LOOP_SH), self.mind_name],
             env=env, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
         )
 
     def test_cost_warn_event_emitted_when_threshold_exceeded(self) -> None:

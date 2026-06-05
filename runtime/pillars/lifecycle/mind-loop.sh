@@ -320,10 +320,27 @@ _mindloop_peek_inbox() {
 # F3 準拠: mkdir / write 失敗は WARN を stderr に出すだけで loop は続ける。
 NOTIFY_LOG_FILE="${RUNTIME_HOME}/logs/notify.jsonl"
 
+# Phase 5g.B #173: L3 notify (= operator command fork)。
+# AI_ORG_OS_NOTIFY_CMD が設定されていれば、L1 file write 後に shell command を
+# fork し、JSON entry を stdin で渡す。timeout で wrap し、cmd が hang しても
+# Realm を止めない (= ADR-0013 §1 F3、ADR-0028 §2.3 L3)。
+# AI_ORG_OS_NOTIFY_CMD_TIMEOUT (default 5s) で wait 上限。
+NOTIFY_CMD_TIMEOUT="${AI_ORG_OS_NOTIFY_CMD_TIMEOUT:-5}"
+if ! [[ "${NOTIFY_CMD_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+  echo "[mind-loop] WARN: AI_ORG_OS_NOTIFY_CMD_TIMEOUT '${NOTIFY_CMD_TIMEOUT}' not integer, fallback 5s" >&2
+  NOTIFY_CMD_TIMEOUT=5
+fi
+
 # Usage: _mindloop_notify <severity> <event_name> <message> [<extra_json_fields>]
 # extra は leading comma 付きの JSON フラグメント。message は double-quote
 # 内に literal 埋め込み (= 改行 / " を含めない呼び出し側責任、本 helper では
 # bash printf に渡すだけ)。
+#
+# 経路:
+#   L1 (file): logs/notify.jsonl に JSON append (= ADR-0028 §2.3 必須、本関数)
+#   L2 (stderr): callsite が tee 等で別途 echo (= 関数では行わない)
+#   L3 (operator command): AI_ORG_OS_NOTIFY_CMD set 時に fork、JSON を stdin
+#     経由で渡す (= Slack webhook / email / GitHub issue 起票 等の utilizer 構成)
 _mindloop_notify() {
   local severity="$1"
   local event="$2"
@@ -337,11 +354,37 @@ _mindloop_notify() {
   fi
   local ts
   ts="$(_mindloop_iso_ms)"
-  if ! printf '{"ts":"%s","severity":"%s","source":"mind-loop","actor":"%s","event":"%s","message":"%s"%s}\n' \
-        "${ts}" "${severity}" "${MIND_NAME}" "${event}" "${message}" "${extra}" \
-        >> "${NOTIFY_LOG_FILE}" 2>/dev/null; then
+  local json_line
+  json_line="$(printf '{"ts":"%s","severity":"%s","source":"mind-loop","actor":"%s","event":"%s","message":"%s"%s}' \
+        "${ts}" "${severity}" "${MIND_NAME}" "${event}" "${message}" "${extra}")"
+  if ! printf '%s\n' "${json_line}" >> "${NOTIFY_LOG_FILE}" 2>/dev/null; then
     echo "[mind-loop] WARN: notify write failed: ${NOTIFY_LOG_FILE}" >&2
     return 0
+  fi
+  # L3 fork (= ADR-0028 §2.3 L3、Phase 5g.B #173)。env 未設定 / 空文字なら skip。
+  # cmd は user shell (= bash -c) で解釈、stdin に JSON 1 行を流す。
+  # **背景化 + disown + fd close** することで mind-loop は L3 cmd の完了を待た
+  # ず、また Python subprocess の親 fd が L3 子 process に保持され続けて caller
+  # の wait が解けない問題 (= MSYS で観察) を避ける。Realm は絶対 block しない
+  # (ADR-0013 §1 F3)。timeout は L3 cmd の暴走を抑える保険 (= utilizer の手元
+  # process が増え続けないため)。
+  if [ -n "${AI_ORG_OS_NOTIFY_CMD:-}" ]; then
+    local _payload="${json_line}"
+    if [ -n "${TIMEOUT_BIN:-}" ]; then
+      (
+        exec </dev/null >/dev/null 2>&1
+        printf '%s\n' "${_payload}" | "${TIMEOUT_BIN}" --kill-after=2 \
+          "${NOTIFY_CMD_TIMEOUT}" bash -c "${AI_ORG_OS_NOTIFY_CMD}"
+      ) &
+      disown 2>/dev/null || true
+    else
+      echo "[mind-loop] WARN: AI_ORG_OS_NOTIFY_CMD set but timeout bin missing (L3 fork unprotected)" >&2
+      (
+        exec </dev/null >/dev/null 2>&1
+        printf '%s\n' "${_payload}" | bash -c "${AI_ORG_OS_NOTIFY_CMD}"
+      ) &
+      disown 2>/dev/null || true
+    fi
   fi
   return 0
 }
