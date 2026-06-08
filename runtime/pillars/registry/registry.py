@@ -53,6 +53,10 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
 REPO_DIR = RUNTIME_DIR.parent
 TEMPLATES_DIR = REPO_DIR / "templates"
 
+# Phase 5g.A #170: framework_version constraint warner (same-dir import)。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from version import warn_if_mismatch as _warn_framework_mismatch  # noqa: E402
+
 
 def _home_kinds_dir() -> Path | None:
     """利用者の Kind 実体 dir (`$AI_ORG_OS_HOME/kinds`)。未設定なら None。
@@ -201,6 +205,11 @@ def _read_kind_file(path: Path) -> KindInfo | None:
             file=sys.stderr,
         )
         return None
+
+    # Phase 5g.A #170: optional framework_version constraint (warn on mismatch)。
+    _warn_framework_mismatch(
+        fm.get("framework_version", ""), source_label=f"kind:{kind_name}",
+    )
 
     return KindInfo(
         name=kind_name,
