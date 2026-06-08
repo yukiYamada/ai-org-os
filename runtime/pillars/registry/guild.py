@@ -48,6 +48,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+# Phase 5g.A #170: framework_version constraint warner (same-dir import)。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from version import warn_if_mismatch as _warn_framework_mismatch  # noqa: E402
+
 # 本ファイルは runtime/pillars/registry/ 配下。
 # Phase 5c-1 / ADR-0020 で Guild source は 2 layer overlay:
 # - home  = $AI_ORG_OS_HOME/guilds/ (利用者の実体, 優先)
@@ -285,6 +289,11 @@ def load_manifest(
             f"guild '{guild_name}' schema_version='{fm['schema_version']}' "
             f"unsupported (v0.1 expects '0.1')"
         )
+    # Phase 5g.A #170: optional framework_version constraint (warn on mismatch)。
+    _warn_framework_mismatch(
+        fm.get("framework_version", ""), source_label=f"guild:{guild_name}",
+    )
+
     return GuildManifest(
         name=guild_name,
         schema_version=fm["schema_version"],

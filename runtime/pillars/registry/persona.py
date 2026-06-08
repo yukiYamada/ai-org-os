@@ -23,6 +23,10 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+# Phase 5g.A #170: framework_version constraint warner (same-dir import)。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from version import warn_if_mismatch as _warn_framework_mismatch  # noqa: E402
+
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -158,6 +162,12 @@ def _read_persona_file(path: Path) -> PersonaInfo | None:
             file=sys.stderr,
         )
         return None
+
+    # Phase 5g.A #170: optional framework_version constraint (warn on mismatch)。
+    _warn_framework_mismatch(
+        _strip_quotes(fm.get("framework_version", "")),
+        source_label=f"persona:{persona_name}",
+    )
 
     return PersonaInfo(
         name=persona_name,
