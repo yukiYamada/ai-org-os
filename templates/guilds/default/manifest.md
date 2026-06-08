@@ -2,8 +2,8 @@
 guild: default
 schema_version: 0.1
 purpose: ai-org-os の最小組織枠。Realm を立ち上げただけで動く既定の Guild
-kinds: [generic]
-personas: [designer, implementer, reviewer, guildmaster]
+kinds: [generic, deterministic, api, human]
+personas: [designer, implementer, reviewer, guildmaster, watcher]
 created_at: 2026-05-25T00:00:00Z
 ---
 
@@ -18,8 +18,10 @@ ai-org-os の **既定 Guild**。`--guild` オプションを指定せずに spa
 
 ## メンバー構成
 
-- **kinds**: `generic` のみ (現状 ai-org-os が提供する唯一の Kind)
-- **personas**: `designer` / `implementer` / `reviewer` (作業 3 職種) + `guildmaster` (Phase 5c-2 で追加された運営層)
+- **kinds**: `generic` (claude) + `deterministic` + `api` (spec) + `human` (spec)
+  (Phase 5g.A #169 で 4 種類)
+- **personas**: `designer` / `implementer` / `reviewer` (作業 3 職種、claude
+  ベース) + `guildmaster` (運営層) + `watcher` (deterministic kind 用 reference)
 
 新規 Persona / Kind を追加した場合は本 manifest の `kinds` / `personas` を更新するか、新しい Guild を `$AI_ORG_OS_HOME/guilds/<name>/` に作る (ADR-0020 overlay)。
 
