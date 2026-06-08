@@ -319,6 +319,170 @@ class TestKindOverlay(unittest.TestCase):
         self.assertIsNone(get_kind("generic"))
 
 
+class TestKindRuntime(unittest.TestCase):
+    """Phase 5g.A #169: Kind frontmatter の `runtime:` field を読む。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_kind_with_runtime(self, name: str, runtime: str | None) -> Path:
+        path = self.dir / f"{name}.md"
+        if runtime is None:
+            content = (
+                f"---\nkind: {name}\nversion: 0.1\nstatus: experimental\n"
+                f"---\n\nbody\n"
+            )
+        else:
+            content = (
+                f"---\nkind: {name}\nversion: 0.1\nstatus: experimental\n"
+                f"runtime: {runtime}\n---\n\nbody\n"
+            )
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_runtime_default_claude_when_missing(self) -> None:
+        self._write_kind_with_runtime("k1", None)
+        info = get_kind("k1", kinds_dir=self.dir)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.runtime, "claude")
+
+    def test_runtime_explicit_claude(self) -> None:
+        self._write_kind_with_runtime("k2", "claude")
+        info = get_kind("k2", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "claude")
+
+    def test_runtime_deterministic(self) -> None:
+        self._write_kind_with_runtime("k3", "deterministic")
+        info = get_kind("k3", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "deterministic")
+
+    def test_runtime_api(self) -> None:
+        self._write_kind_with_runtime("k4", "api")
+        info = get_kind("k4", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "api")
+
+    def test_runtime_human(self) -> None:
+        self._write_kind_with_runtime("k5", "human")
+        info = get_kind("k5", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "human")
+
+    def test_runtime_case_insensitive(self) -> None:
+        """`runtime: CLAUDE` も `claude` として受け取る。"""
+        self._write_kind_with_runtime("k6", "DETERMINISTIC")
+        info = get_kind("k6", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "deterministic")
+
+    def test_unknown_runtime_falls_back_to_claude(self) -> None:
+        """unknown 値は WARN + claude fallback (= silent breakage 回避)。"""
+        from io import StringIO
+        from unittest.mock import patch
+
+        self._write_kind_with_runtime("k7", "wasm")
+        with patch("sys.stderr", new_callable=StringIO) as err:
+            info = get_kind("k7", kinds_dir=self.dir)
+        self.assertEqual(info.runtime, "claude")
+        self.assertIn("unknown runtime", err.getvalue())
+
+    def test_runtime_appears_in_list(self) -> None:
+        self._write_kind_with_runtime("k8", "deterministic")
+        kinds = list_kinds(self.dir)
+        self.assertEqual(len(kinds), 1)
+        self.assertEqual(kinds[0].runtime, "deterministic")
+
+    def _templates_kinds_dir(self) -> Path:
+        # runtime/pillars/registry/test_registry.py → templates/kinds/
+        return Path(__file__).resolve().parent.parent.parent.parent / "templates" / "kinds"
+
+    def test_template_generic_has_claude_runtime(self) -> None:
+        """同梱 templates/kinds/generic.md は runtime=claude を明示している。"""
+        info = get_kind("generic", kinds_dir=self._templates_kinds_dir())
+        self.assertIsNotNone(info)
+        self.assertEqual(info.runtime, "claude")
+
+    def test_template_deterministic_has_deterministic_runtime(self) -> None:
+        info = get_kind("deterministic", kinds_dir=self._templates_kinds_dir())
+        self.assertIsNotNone(info)
+        self.assertEqual(info.runtime, "deterministic")
+
+    def test_template_api_has_api_runtime(self) -> None:
+        info = get_kind("api", kinds_dir=self._templates_kinds_dir())
+        self.assertIsNotNone(info)
+        self.assertEqual(info.runtime, "api")
+
+    def test_template_human_has_human_runtime(self) -> None:
+        info = get_kind("human", kinds_dir=self._templates_kinds_dir())
+        self.assertIsNotNone(info)
+        self.assertEqual(info.runtime, "human")
+
+
+class TestRuntimeCli(unittest.TestCase):
+    """`registry.py runtime <name>` CLI subcommand。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self._old = os.environ.get("AI_ORG_OS_HOME")
+        os.environ["AI_ORG_OS_HOME"] = str(self.home)
+
+    def tearDown(self) -> None:
+        if self._old is None:
+            os.environ.pop("AI_ORG_OS_HOME", None)
+        else:
+            os.environ["AI_ORG_OS_HOME"] = self._old
+        self._tmp.cleanup()
+
+    def _write(self, name: str, runtime: str | None) -> None:
+        d = self.home / "kinds"
+        d.mkdir(parents=True, exist_ok=True)
+        if runtime:
+            content = (
+                f"---\nkind: {name}\nversion: 0.1\nstatus: experimental\n"
+                f"runtime: {runtime}\n---\n\nbody\n"
+            )
+        else:
+            content = (
+                f"---\nkind: {name}\nversion: 0.1\nstatus: experimental\n"
+                f"---\n\nbody\n"
+            )
+        (d / f"{name}.md").write_text(content, encoding="utf-8")
+
+    def test_runtime_cli_prints_runtime(self) -> None:
+        from io import StringIO
+        from unittest.mock import patch
+
+        from registry import main as cli_main
+
+        self._write("custom", "deterministic")
+        with patch("sys.stdout", new_callable=StringIO) as out:
+            rc = cli_main(["runtime", "custom"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), "deterministic")
+
+    def test_runtime_cli_unregistered_returns_1(self) -> None:
+        from io import StringIO
+        from unittest.mock import patch
+
+        from registry import main as cli_main
+
+        with patch("sys.stderr", new_callable=StringIO):
+            rc = cli_main(["runtime", "ghost"])
+        self.assertEqual(rc, 1)
+
+    def test_runtime_cli_missing_arg_returns_2(self) -> None:
+        from io import StringIO
+        from unittest.mock import patch
+
+        from registry import main as cli_main
+
+        with patch("sys.stderr", new_callable=StringIO):
+            rc = cli_main(["runtime"])
+        self.assertEqual(rc, 2)
+
+
 class TestOSErrorHandling(unittest.TestCase):
     def test_unreadable_file_is_skipped(self) -> None:
         # POSIX のみ chmod が効くので非 Windows でのみ実施。

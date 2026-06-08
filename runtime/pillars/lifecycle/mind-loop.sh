@@ -168,6 +168,29 @@ if [ ! -d "${MIND_DIR}" ]; then
   exit 2
 fi
 
+# Phase 5g.A #169: Kind runtime を解決する (= cycle body の dispatch に使う)。
+# Mind の kind は authoritative source = registry/minds/<name>.md。frontmatter
+# の `kind:` 行を grep する (= shell からの軽量 lookup)。registry が不正なら
+# default "claude" にフォールバック (= 既存挙動と互換)。
+MIND_REGISTRY_ENTRY="${RUNTIME_HOME}/registry/minds/${MIND_NAME}.md"
+MIND_KIND="generic"
+if [ -r "${MIND_REGISTRY_ENTRY}" ]; then
+  MIND_KIND_RAW="$(grep -E '^kind:' "${MIND_REGISTRY_ENTRY}" 2>/dev/null | head -1 | sed 's/^kind:[[:space:]]*//' | tr -d '\r\n[:space:]')"
+  if [ -n "${MIND_KIND_RAW}" ]; then
+    MIND_KIND="${MIND_KIND_RAW}"
+  fi
+fi
+
+REGISTRY_PY="${RUNTIME_DIR}/pillars/registry/registry.py"
+KIND_RUNTIME="claude"
+if [ -x "${PEEK_PYTHON_BIN}" ] || command -v "${PEEK_PYTHON_BIN}" >/dev/null 2>&1; then
+  RT_RAW="$("${PEEK_PYTHON_BIN}" "${REGISTRY_PY}" runtime "${MIND_KIND}" 2>/dev/null | tr -d '\r\n[:space:]')"
+  if [ -n "${RT_RAW}" ]; then
+    KIND_RUNTIME="${RT_RAW}"
+  fi
+fi
+echo "[mind-loop] resolved kind='${MIND_KIND}' runtime='${KIND_RUNTIME}'"
+
 # 二重起動の atomic ロック。
 # `mkdir` は POSIX 上 atomic なので、これを lock として使う。
 # Codex P1 PR #61: lock 取得直後に PID を書き、stale 判定は pidfile の有無ではなく
@@ -410,15 +433,47 @@ _mindloop_emit_event() {
   return 0
 }
 
-# ----- claude バイナリ解決 -----
+# ----- claude バイナリ解決 (Phase 5g.A #169: runtime=claude 時のみ) -----
 
-CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
-if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
-  echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH" >&2
-  echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path" >&2
-  echo "[HINT] For tests, AI_ORG_OS_CLAUDE_BIN can point to a stub script" >&2
-  exit 4
+CLAUDE_BIN=""
+if [ "${KIND_RUNTIME}" = "claude" ]; then
+  CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
+  if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
+    echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH" >&2
+    echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path" >&2
+    echo "[HINT] For tests, AI_ORG_OS_CLAUDE_BIN can point to a stub script" >&2
+    exit 4
+  fi
 fi
+
+# Phase 5g.A #169: deterministic Kind は body.sh を Mindspace 直下に持つ。
+# 存在しなければ spawn が崩れているので fail-fast (= mind-loop ごと exit 4)。
+if [ "${KIND_RUNTIME}" = "deterministic" ]; then
+  BODY_SH="${MIND_DIR}/body.sh"
+  if [ ! -f "${BODY_SH}" ]; then
+    echo "[ERROR] runtime=deterministic but body.sh not found at ${BODY_SH}" >&2
+    echo "[HINT] Respawn the Mind (Persona must contain a fenced bash block, see kinds/deterministic.md)." >&2
+    exit 4
+  fi
+fi
+
+# Phase 5g.A #169: api / human Kind は未実装 (spec only)。spawn は通すが
+# mind-loop は明示的に exit する (= silent run-but-do-nothing は避ける)。
+case "${KIND_RUNTIME}" in
+  claude|deterministic)
+    : # supported runtimes
+    ;;
+  api|human)
+    echo "[ERROR] runtime='${KIND_RUNTIME}' is spec only (Phase 5g.A #169)." >&2
+    echo "[HINT] Implementation pending; only kind runtimes 'claude' and 'deterministic' are wired." >&2
+    echo "[HINT] See templates/kinds/${KIND_RUNTIME}.md for the spec." >&2
+    exit 4
+    ;;
+  *)
+    echo "[ERROR] unknown runtime '${KIND_RUNTIME}' for kind '${MIND_KIND}'." >&2
+    exit 4
+    ;;
+esac
 
 # Phase 5f Step 4.2 / ADR-0028 §2.1: per-cycle timeout 用に `timeout` を resolve。
 # GNU coreutils `timeout` を期待 (Linux + Git Bash on Windows でデフォルト)。
@@ -467,27 +522,52 @@ while :; do
     PROMPT="cycle ${CYCLE} for mind ${MIND_NAME}. INBOX: ${PEEK_SUMMARY}. Check inbox via Nexus and act per your Persona."
   fi
 
-  # claude をブロッキング呼び出し。
-  # Phase 5g.B #172: --output-format json を渡し、stdout を per-cycle JSON file へ、
-  # stderr を LOG_FILE へ split する。JSON parse 後に cost event emit + result
-  # text を LOG_FILE 追記する形にして、人間が眼で grep する従来体験を維持。
-  # CLAUDE.md (Persona) と .mcp.json (Nexus) は Mindspace 内に置かれているので、
-  # cwd を Mindspace にすれば自動的に読まれる。
-  # Phase 5f Step 4.2 / ADR-0028 §2.1: CYCLE_TIMEOUT > 0 なら GNU coreutils
-  # `timeout --kill-after=10` で wrap。SIGTERM 後 10 秒猶予→ SIGKILL。
+  # cycle body の実行: Kind runtime で分岐する (Phase 5g.A #169)。
+  # - runtime=claude:        claude -p --output-format json (= 既存 path)
+  # - runtime=deterministic: ${MIND_DIR}/body.sh を実行 (= LLM 不要、stdout は raw text)
+  # どちらも CYCLE_JSON_FILE に stdout を、LOG_FILE に stderr を流す。
+  # CYCLE_TIMEOUT > 0 なら GNU coreutils `timeout --kill-after=10` で wrap (= ADR-0028 §2.1)。
   mkdir -p "${CYCLES_JSON_DIR}" 2>/dev/null || true
   CYCLE_JSON_FILE="${CYCLES_JSON_DIR}/cycle-$(printf '%05d' "${CYCLE}").json"
   set +e
-  if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
-    (
-      cd "${MIND_DIR}"
-      "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
-    ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+  if [ "${KIND_RUNTIME}" = "claude" ]; then
+    # claude をブロッキング呼び出し。Phase 5g.B #172: --output-format json で
+    # stdout を per-cycle JSON file へ、stderr を LOG_FILE へ split。
+    # CLAUDE.md (Persona) と .mcp.json (Nexus) は Mindspace 内に置かれているので
+    # cwd を Mindspace にすれば自動的に読まれる。
+    if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
+      (
+        cd "${MIND_DIR}"
+        "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
+      ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+    else
+      (
+        cd "${MIND_DIR}"
+        "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
+      ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+    fi
   else
-    (
-      cd "${MIND_DIR}"
-      "${CLAUDE_BIN}" -p --output-format json "${PROMPT}"
-    ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+    # runtime=deterministic: Mindspace 内 body.sh を 1 cycle 1 回実行。
+    # 環境変数 AI_ORG_OS_MIND_NAME / AI_ORG_OS_HOME / AI_ORG_OS_CYCLE を渡し、
+    # script 側から自己 identity と context を参照可能にする。
+    if [ "${CYCLE_TIMEOUT}" -gt 0 ]; then
+      (
+        cd "${MIND_DIR}"
+        AI_ORG_OS_MIND_NAME="${MIND_NAME}" \
+          AI_ORG_OS_HOME="${RUNTIME_HOME}" \
+          AI_ORG_OS_CYCLE="${CYCLE}" \
+          "${TIMEOUT_BIN}" --kill-after=10 "${CYCLE_TIMEOUT}" \
+            bash "${BODY_SH}"
+      ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+    else
+      (
+        cd "${MIND_DIR}"
+        AI_ORG_OS_MIND_NAME="${MIND_NAME}" \
+          AI_ORG_OS_HOME="${RUNTIME_HOME}" \
+          AI_ORG_OS_CYCLE="${CYCLE}" \
+          bash "${BODY_SH}"
+      ) > "${CYCLE_JSON_FILE}" 2>> "${LOG_FILE}"
+    fi
   fi
   RC=$?
   set -e
@@ -499,8 +579,10 @@ while :; do
   # threshold 超過)、_mindloop_notify L1 (logs/notify.jsonl) に warning を
   # 書き込む。詳細 (cost_usd / threshold_usd) は event_log の mind_loop.cost_warn
   # に既に書かれているので、notify は cycle 参照のみ。
+  # Phase 5g.A #169: cost parser は claude JSON 専用 (deterministic は raw text)。
+  # runtime=claude のみで実行する。
   COST_RC=0
-  if [ -s "${CYCLE_JSON_FILE}" ]; then
+  if [ "${KIND_RUNTIME}" = "claude" ] && [ -s "${CYCLE_JSON_FILE}" ]; then
     set +e
     "${PEEK_PYTHON_BIN}" "${SCRIPT_DIR}/_parse_cost.py" \
       "${CYCLE_JSON_FILE}" "${MIND_NAME}" "${CYCLE}" "${EVENT_LOG_FILE}" \

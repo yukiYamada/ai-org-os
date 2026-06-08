@@ -231,7 +231,14 @@ class TestDetectDrift(unittest.TestCase):
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _TEMPLATES_PERSONAS = _REPO_ROOT / "templates" / "personas"
-_TEMPLATE_PERSONA_NAMES = ("designer", "implementer", "reviewer", "guildmaster")
+_TEMPLATE_PERSONA_NAMES = (
+    "designer",
+    "implementer",
+    "reviewer",
+    "guildmaster",
+    # Phase 5g.A #169: deterministic Kind reference Persona
+    "watcher",
+)
 
 
 class TestRealPersonas(unittest.TestCase):

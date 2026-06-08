@@ -255,17 +255,11 @@ if [ ! -f "${HOST_NEXUS_PY}" ]; then
   exit 5
 fi
 
-# --start-loop 指定時は claude バイナリも事前検証する。
-# (mind-loop.sh の exit 4 を spawn 時点で先取り。「spawn 成功 / loop 即死」を防ぐ)
-if [ "${START_LOOP}" = "1" ]; then
-  CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
-  if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
-    echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH." >&2
-    echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path." >&2
-    echo "[HINT] Without claude, the --start-loop option cannot run mind-loop.sh." >&2
-    exit 8
-  fi
-fi
+# --start-loop 指定時の claude バイナリ事前検証は Kind runtime が claude の
+# ときだけ実施する (Phase 5g.A #169)。deterministic / api / human Kind は
+# claude を呼ばないため check 不要。runtime の lookup は REGISTRY_PY 検証
+# 直後にまとめて行う (HOST_PYTHON_BIN がそこで確定するため)。
+# 旧来の即時 claude check は本 PR で REGISTRY_PY check 後に移動した。
 
 # Phase 5c-1 (#88 Codex P2): Kind の registration を Registry Pillar で再検証。
 # resolve_overlay_md は file 存在のみで通すため、home overlay (例:
@@ -286,6 +280,27 @@ if ! "${HOST_PYTHON_BIN}" "${REGISTRY_PY}" check "${KIND}"; then
   echo "[HINT] Inspect Kind:           ${HOST_PYTHON_BIN} ${REGISTRY_PY} get ${KIND}" >&2
   echo "[HINT] If you edited \$AI_ORG_OS_HOME/kinds/${KIND}.md, verify its frontmatter." >&2
   exit 2
+fi
+
+# Phase 5g.A #169: Kind runtime を取得し、claude path とそれ以外を分岐する。
+# registry.py が未知 runtime を WARN しつつ claude に倒すので、ここでは
+# 取得失敗 (= unregistered 等) のみ抑止する。
+KIND_RUNTIME="$("${HOST_PYTHON_BIN}" "${REGISTRY_PY}" runtime "${KIND}" 2>/dev/null | tr -d '\r\n' || echo "claude")"
+if [ -z "${KIND_RUNTIME}" ]; then
+  KIND_RUNTIME="claude"
+fi
+echo "[spawn-mind]   runtime: ${KIND_RUNTIME}"
+
+# --start-loop の claude バイナリ事前検証は runtime=claude 時のみ。
+# (mind-loop.sh の exit 4 を spawn 時点で先取り。「spawn 成功 / loop 即死」防止)
+if [ "${START_LOOP}" = "1" ] && [ "${KIND_RUNTIME}" = "claude" ]; then
+  CLAUDE_BIN="${AI_ORG_OS_CLAUDE_BIN:-claude}"
+  if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1; then
+    echo "[ERROR] claude command '${CLAUDE_BIN}' not found in PATH." >&2
+    echo "[HINT] Install Claude Code, or set AI_ORG_OS_CLAUDE_BIN to your claude binary path." >&2
+    echo "[HINT] Without claude, the --start-loop option cannot run mind-loop.sh." >&2
+    exit 8
+  fi
 fi
 
 # Phase 5g.A #167: Persona frontmatter 検証 (= persona / version / status の
@@ -498,10 +513,15 @@ echo "[spawn-mind] Mind registry entry: ${REGISTRY_ENTRY}"
 # read_inbox / ack_dispatch calls whose from_mind / mind_name does not match
 # this binding, preventing one Mind from impersonating another via crafted
 # arguments.
-echo "[spawn-mind] Installing Nexus MCP config (.mcp.json), bound to '${MIND_NAME}'"
-echo "  python: ${HOST_PYTHON_BIN}"
-echo "  nexus:  ${HOST_NEXUS_PY}"
-cat > "${MIND_DIR}/.mcp.json" <<JSON
+#
+# Phase 5g.A #169: .mcp.json は claude CLI が読む。runtime != claude では
+# 配置しない (= deterministic / api / human Kind は MCP を使わない、storage.py
+# / 専用 client を直接呼ぶ前提)。
+if [ "${KIND_RUNTIME}" = "claude" ]; then
+  echo "[spawn-mind] Installing Nexus MCP config (.mcp.json), bound to '${MIND_NAME}'"
+  echo "  python: ${HOST_PYTHON_BIN}"
+  echo "  nexus:  ${HOST_NEXUS_PY}"
+  cat > "${MIND_DIR}/.mcp.json" <<JSON
 {
   "mcpServers": {
     "nexus": {
@@ -516,6 +536,41 @@ cat > "${MIND_DIR}/.mcp.json" <<JSON
   }
 }
 JSON
+else
+  echo "[spawn-mind] Skipping .mcp.json (runtime=${KIND_RUNTIME}, MCP is claude-specific)"
+fi
+
+# Phase 5g.A #169: runtime=deterministic では Persona の最初の \`\`\`bash
+# code block を Mindspace 直下に body.sh として配置する。runtime-deterministic.sh
+# が 1 cycle でこれを実行する。
+if [ "${KIND_RUNTIME}" = "deterministic" ]; then
+  echo "[spawn-mind] Extracting body.sh from Persona (runtime=deterministic)"
+  BODY_PY="$(cat <<'PYEOF'
+import re
+import sys
+
+text = sys.stdin.read()
+# Persona body 内の最初の ```bash ... ``` を抽出。
+m = re.search(r"^```bash\s*\n(.*?)^```\s*$", text, re.MULTILINE | re.DOTALL)
+if not m:
+    sys.stderr.write(
+        "[ERROR] Persona has no ```bash ... ``` block; runtime=deterministic "
+        "requires the Persona to expose its body script in a fenced bash block.\n"
+    )
+    sys.exit(1)
+sys.stdout.write(m.group(1))
+PYEOF
+)"
+  BODY_PATH="${MIND_DIR}/body.sh"
+  if ! "${HOST_PYTHON_BIN}" -c "${BODY_PY}" < "${MIND_DIR}/CLAUDE.md" > "${BODY_PATH}"; then
+    echo "[ERROR] Failed to extract body.sh from Persona '${PERSONA}'." >&2
+    echo "[HINT] Add a triple-backtick bash fenced block to ${PERSONA_FILE}." >&2
+    rm -rf "${MIND_DIR}"
+    exit 15
+  fi
+  chmod +x "${BODY_PATH}" 2>/dev/null || true
+  echo "[spawn-mind]   body.sh: ${BODY_PATH}"
+fi
 
 # Phase 5g.B #171: --restore-from が指定されていたら preserved snapshot から
 # state.md / notes/ を Mindspace に copy する。CLAUDE.md / .mcp.json / workspace
@@ -596,8 +651,19 @@ if [ "${START_LOOP}" = "1" ]; then
 else
   echo ""
   echo "Next step (manual):"
-  echo "  cd ${MIND_DIR}"
-  echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
+  case "${KIND_RUNTIME}" in
+    claude)
+      echo "  cd ${MIND_DIR}"
+      echo "  claude   # CLAUDE.md (Persona) と .mcp.json (Nexus 接続) が自動的に読まれます"
+      ;;
+    deterministic)
+      echo "  bash ${MIND_DIR}/body.sh   # 1 cycle 相当を手動実行"
+      ;;
+    api|human)
+      echo "  # runtime=${KIND_RUNTIME} は Phase 5g.A #169 では spec only。"
+      echo "  # mind-loop.sh が起動すると not-implemented で exit します。"
+      ;;
+  esac
   if [ "${WS_WANT_WORKTREE}" = "1" ]; then
     echo ""
     echo "Code work directory (git worktree):"
@@ -608,6 +674,8 @@ else
   echo "  ${SCRIPT_DIR}/mind-loop.sh ${MIND_NAME}"
 fi
 echo ""
-echo "Nexus が提供する tool:"
-echo "  - send_dispatch / read_inbox / ack_dispatch"
-echo "  Mind は他 Mind の Mindspace を直接触れません。すべての通信は Nexus 経由です（Axiom）。"
+if [ "${KIND_RUNTIME}" = "claude" ]; then
+  echo "Nexus が提供する tool:"
+  echo "  - send_dispatch / read_inbox / ack_dispatch"
+  echo "  Mind は他 Mind の Mindspace を直接触れません。すべての通信は Nexus 経由です（Axiom）。"
+fi
