@@ -50,6 +50,10 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+# Phase 5g.A #170: framework_version constraint warner (same-dir import)。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from version import warn_if_mismatch as _warn_framework_mismatch  # noqa: E402
+
 # Locate runtime / repo root:
 #   runtime/pillars/registry/workspace.py
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
@@ -315,6 +319,11 @@ def load_workspace(
     branch_prefix = fm.get("branch_prefix", "")
     allowed_cli = _parse_yaml_list(fm.get("allowed_cli", ""))
     purpose = fm.get("purpose", "")
+
+    # Phase 5g.A #170: optional framework_version constraint (warn on mismatch)。
+    _warn_framework_mismatch(
+        fm.get("framework_version", ""), source_label=f"workspace:{name}",
+    )
 
     return WorkspaceTemplate(
         name=name,
