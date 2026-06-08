@@ -3,6 +3,11 @@ persona: implementer
 version: 0.1
 status: experimental
 mixins: [mindspace-info]
+inbound_topics: [design, review-reply]
+outbound_topics: [review-request, spec-question]
+forbidden_ops: [gh pr merge, git push --force, git push origin main, gh pr close, gh issue close, gh secret, gh auth login, gh repo delete]
+cycle_budget_seconds_max: 60
+trust_layer: L1
 ---
 
 # Persona: Implementer

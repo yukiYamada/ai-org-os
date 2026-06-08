@@ -3,6 +3,11 @@ persona: designer
 version: 0.1
 status: experimental
 mixins: [mindspace-info]
+inbound_topics: [design-request, spec-question]
+outbound_topics: [design, transfer]
+forbidden_ops: []
+cycle_budget_seconds_max: 60
+trust_layer: L1
 ---
 
 # Persona: Designer
