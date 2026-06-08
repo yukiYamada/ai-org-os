@@ -2,6 +2,7 @@
 kind: generic
 version: 0.1
 status: experimental
+runtime: claude
 ---
 
 # Kind: Generic

@@ -107,6 +107,14 @@ _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # frontmatter で読み取るキー。値は str として保持し、欠落時は "?" を返す。
 _FRONTMATTER_KEYS = ("name", "version", "status")
 
+# Phase 5g.A #169: Kind が宣言する runtime (= Mind body 実装の discriminator)。
+# - "claude":         claude code を呼ぶ (= 既存実装。default。`mind-loop.sh` が `claude -p` で 1 cycle)
+# - "deterministic":  決定的 script を呼ぶ (= API key 不要、テスト / 監視 Mind 向け)
+# - "api":            外部 LLM API を直接叩く (= openai / gemini 等。spec 段階、未実装)
+# - "human":          human-in-the-loop seat (= 人間応答待ち。spec 段階、未実装)
+KIND_RUNTIMES = ("claude", "deterministic", "api", "human")
+DEFAULT_KIND_RUNTIME = "claude"  # 既存 Kind が runtime field 未指定でも互換
+
 
 class RegistryError(Exception):
     """Registry 層の汎用エラー（呼び出し側で扱いやすいよう型を切る）。"""
@@ -120,6 +128,9 @@ class KindInfo:
     path: Path
     version: str
     status: str
+    # Phase 5g.A #169: Mind body 実装の discriminator。Kind frontmatter の
+    # `runtime: <name>` から読む。未指定 / 不明値は "claude" (= 既存 default)。
+    runtime: str = DEFAULT_KIND_RUNTIME
 
 
 def _is_valid_name(name: str) -> bool:
@@ -211,11 +222,28 @@ def _read_kind_file(path: Path) -> KindInfo | None:
         fm.get("framework_version", ""), source_label=f"kind:{kind_name}",
     )
 
+    # Phase 5g.A #169: runtime field を読む。未指定 → default、未知値 → WARN +
+    # default に倒す (= silent breakage を避けるが spawn を止めない、利用者の
+    # typo を可視化)。
+    runtime_raw = fm.get("runtime", "").strip().lower()
+    if not runtime_raw:
+        runtime = DEFAULT_KIND_RUNTIME
+    elif runtime_raw in KIND_RUNTIMES:
+        runtime = runtime_raw
+    else:
+        print(
+            f"[WARN] kind '{kind_name}' has unknown runtime '{runtime_raw}', "
+            f"falling back to '{DEFAULT_KIND_RUNTIME}' (known: {list(KIND_RUNTIMES)})",
+            file=sys.stderr,
+        )
+        runtime = DEFAULT_KIND_RUNTIME
+
     return KindInfo(
         name=kind_name,
         path=path,
         version=fm.get("version", "?"),
         status=fm.get("status", "?"),
+        runtime=runtime,
     )
 
 
@@ -317,10 +345,12 @@ def _format_table(kinds: list[KindInfo]) -> str:
         "=== Mind Kind Registry ===",
         f"  total: {len(kinds)}",
         "",
-        f"{'NAME':<20} {'VERSION':<10} {'STATUS':<14} PATH",
+        f"{'NAME':<20} {'VERSION':<10} {'STATUS':<14} {'RUNTIME':<14} PATH",
     ]
     for k in kinds:
-        lines.append(f"{k.name:<20} {k.version:<10} {k.status:<14} {k.path}")
+        lines.append(
+            f"{k.name:<20} {k.version:<10} {k.status:<14} {k.runtime:<14} {k.path}"
+        )
     return "\n".join(lines)
 
 
@@ -358,6 +388,7 @@ def _cmd_get(argv: list[str]) -> int:
         print(f"name:    {info.name}")
         print(f"version: {info.version}")
         print(f"status:  {info.status}")
+        print(f"runtime: {info.runtime}")
         print(f"path:    {info.path}")
     return 0
 
@@ -372,17 +403,37 @@ def _cmd_check(argv: list[str]) -> int:
     return 1
 
 
+def _cmd_runtime(argv: list[str]) -> int:
+    """Phase 5g.A #169: 指定 Kind の runtime field を stdout に。
+
+    spawn-mind.sh / mind-loop.sh が呼ぶ。
+    Exit: 0 = ok, 1 = not registered, 2 = usage error.
+    """
+    if not argv:
+        print("[ERROR] 'runtime' requires a kind name", file=sys.stderr)
+        return 2
+    name = argv[0]
+    info = get_kind(name)
+    if info is None:
+        print(f"[ERROR] kind '{name}' is not registered", file=sys.stderr)
+        return 1
+    print(info.runtime)
+    return 0
+
+
 def _print_help() -> None:
     print(
         "Usage:\n"
         "  registry.py list [--json]\n"
         "  registry.py get <name> [--json]\n"
         "  registry.py check <name>\n"
+        "  registry.py runtime <name>\n"
         "\n"
         "Exit codes:\n"
-        "  list:  always 0\n"
-        "  get:   0 = found, 1 = not found, 2 = usage error\n"
-        "  check: 0 = registered, 1 = not registered, 2 = usage error"
+        "  list:    always 0\n"
+        "  get:     0 = found, 1 = not found, 2 = usage error\n"
+        "  check:   0 = registered, 1 = not registered, 2 = usage error\n"
+        "  runtime: 0 = ok, 1 = not registered, 2 = usage error"
     )
 
 
@@ -400,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_get(rest)
     if subcmd == "check":
         return _cmd_check(rest)
+    if subcmd == "runtime":
+        return _cmd_runtime(rest)
     print(f"[ERROR] unknown subcommand: {subcmd}", file=sys.stderr)
     _print_help()
     return 2
