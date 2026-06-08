@@ -2,6 +2,11 @@
 persona: guildmaster
 version: 0.1
 status: experimental
+inbound_topics: []
+outbound_topics: []
+forbidden_ops: []
+cycle_budget_seconds_max: 60
+trust_layer: L1
 ---
 
 # Persona: Guildmaster
