@@ -113,8 +113,8 @@ verify_loop_owner() {
   local pid="$1"
   local mind_name="$2"
   if [ ! -r "/proc/${pid}/cmdline" ]; then
-    echo "[kill-mind] WARNING: /proc not available, cannot verify pid ${pid} identity (best-effort kill)" >&2
-    return 0
+    echo "[kill-mind] ERROR: /proc not available, cannot verify pid ${pid} identity — refusing kill (#196)" >&2
+    return 1
   fi
   local has_script=0 has_mind=0 arg
   while IFS= read -r -d '' arg; do
@@ -302,30 +302,9 @@ sweep_orphan_minds_for() {
   fi
 
   # /proc fallback: Windows / macOS で /proc が無い場合。
-  # ここでは ps の `-o pid,command` で argv を引いて mind 名 + "mind-loop" or
-  # "cycle .* for mind <name>" の組み合わせを探す。
-  # ただし argv は caller が偽装できるため、これは best-effort。識別失敗は
-  # silent に諦める (= 同名 mind を spawn しないという運用前提に依存)。
-  if [ "${found_any}" -eq 0 ] && [ ! -d /proc ]; then
-    if command -v ps >/dev/null 2>&1; then
-      # `ps -ef` の最終列以降が command。awk で pid と残りを分離。
-      # MSYS bash の `ps -ef` は COMMAND 列に full argv が出る。
-      local line pid_field cmd_field
-      while IFS= read -r line; do
-        # 列分解: PID は 2 番目 (UID PID PPID ...)、COMMAND は残り。
-        pid_field="$(printf '%s' "${line}" | awk '{print $2}')"
-        cmd_field="$(printf '%s' "${line}" | awk '{$1=$2=$3=$4=$5=$6=""; print}')"
-        [ -z "${pid_field}" ] && continue
-        case "${cmd_field}" in
-          *"cycle "*"for mind ${mind_name}"*)
-            echo "[kill-mind] Found orphan process (argv match) pid=${pid_field}"
-            kill_process_tree "${pid_field}"
-            found_any=1
-            ;;
-        esac
-      done < <(ps -ef 2>/dev/null | tail -n +2)
-    fi
-  fi
+  # argv pattern match は argv 偽装可能なため安全でない (#199)。
+  # cwd-based sweep のみ実行する (= /proc 不在環境では sweep できない)。
+  # 運用上の影響: rm -rf が EBUSY で WARN を出すので後で気付ける。
 
   return 0
 }
