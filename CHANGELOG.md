@@ -76,7 +76,10 @@ framework に観測上の変更を入れる PR は本 CHANGELOG の `[Unreleased
 - (TBA)
 
 ### Fixed
-- (TBA)
+- **[Security P1 #194]** L3 notify: JSON string escaping for Mind-originated fields
+  (severity / event / message / actor) to prevent malformed JSON when Mind sends
+  quotes / backslashes / control chars. Added `_json_escape_string` helper in
+  `mind-loop.sh` (ADR-0021 A 層 field encoding).
 
 ### Migration
 - (TBA — MAJOR bump 時のみ)

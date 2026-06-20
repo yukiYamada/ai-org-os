@@ -354,10 +354,39 @@ if ! [[ "${NOTIFY_CMD_TIMEOUT}" =~ ^[0-9]+$ ]]; then
   NOTIFY_CMD_TIMEOUT=5
 fi
 
+# JSON string escape helper (ADR-0021 A 層 field encoding、P1 security fix #194)
+# Escapes: " → \", \ → \\, control chars (0x00-0x1F) → \uXXXX
+_json_escape_string() {
+  local input="$1"
+  local output=""
+  local i char byte
+  for ((i=0; i<${#input}; i++)); do
+    char="${input:i:1}"
+    case "$char" in
+      '"')  output="${output}\\\"" ;;
+      '\\') output="${output}\\\\" ;;
+      $'\b') output="${output}\\b" ;;
+      $'\f') output="${output}\\f" ;;
+      $'\n') output="${output}\\n" ;;
+      $'\r') output="${output}\\r" ;;
+      $'\t') output="${output}\\t" ;;
+      *)
+        # Control chars (0x00-0x1F) → \uXXXX
+        byte=$(LC_CTYPE=C printf '%d' "'$char" 2>/dev/null || echo 32)
+        if [ "$byte" -lt 32 ]; then
+          output="${output}$(printf '\\u%04x' "$byte")"
+        else
+          output="${output}${char}"
+        fi
+        ;;
+    esac
+  done
+  printf '%s' "$output"
+}
+
 # Usage: _mindloop_notify <severity> <event_name> <message> [<extra_json_fields>]
-# extra は leading comma 付きの JSON フラグメント。message は double-quote
-# 内に literal 埋め込み (= 改行 / " を含めない呼び出し側責任、本 helper では
-# bash printf に渡すだけ)。
+# extra は leading comma 付きの JSON フラグメント。severity / event / message は
+# 任意文字列を受け付け、内部で JSON escape する (P1 security fix #194)。
 #
 # 経路:
 #   L1 (file): logs/notify.jsonl に JSON append (= ADR-0028 §2.3 必須、本関数)
@@ -377,9 +406,18 @@ _mindloop_notify() {
   fi
   local ts
   ts="$(_mindloop_iso_ms)"
+
+  # JSON escape all string fields (P1 security fix #194)
+  local ts_esc severity_esc actor_esc event_esc message_esc
+  ts_esc="$(_json_escape_string "${ts}")"
+  severity_esc="$(_json_escape_string "${severity}")"
+  actor_esc="$(_json_escape_string "${MIND_NAME}")"
+  event_esc="$(_json_escape_string "${event}")"
+  message_esc="$(_json_escape_string "${message}")"
+
   local json_line
   json_line="$(printf '{"ts":"%s","severity":"%s","source":"mind-loop","actor":"%s","event":"%s","message":"%s"%s}' \
-        "${ts}" "${severity}" "${MIND_NAME}" "${event}" "${message}" "${extra}")"
+        "${ts_esc}" "${severity_esc}" "${actor_esc}" "${event_esc}" "${message_esc}" "${extra}")"
   if ! printf '%s\n' "${json_line}" >> "${NOTIFY_LOG_FILE}" 2>/dev/null; then
     echo "[mind-loop] WARN: notify write failed: ${NOTIFY_LOG_FILE}" >&2
     return 0
@@ -415,6 +453,7 @@ _mindloop_notify() {
 # Usage: _mindloop_emit_event <event_name> [<extra_json_fields>]
 # extra は leading comma 付きの JSON フラグメント
 # (例: ',"cycle":1,"pid":12345')。空なら拡張 field なし。
+# event / actor は JSON escape する (P1 security fix #194)。
 _mindloop_emit_event() {
   local event="$1"
   local extra="${2:-}"
@@ -424,8 +463,15 @@ _mindloop_emit_event() {
   fi
   local ts
   ts="$(_mindloop_iso_ms)"
+
+  # JSON escape string fields (P1 security fix #194)
+  local ts_esc event_esc actor_esc
+  ts_esc="$(_json_escape_string "${ts}")"
+  event_esc="$(_json_escape_string "${event}")"
+  actor_esc="$(_json_escape_string "${MIND_NAME}")"
+
   if ! printf '{"ts":"%s","event":"%s","actor":"%s"%s}\n' \
-        "${ts}" "${event}" "${MIND_NAME}" "${extra}" \
+        "${ts_esc}" "${event_esc}" "${actor_esc}" "${extra}" \
         >> "${EVENT_LOG_FILE}" 2>/dev/null; then
     echo "[mind-loop] WARN: failed to write ${EVENT_LOG_FILE}" >&2
     return 0
