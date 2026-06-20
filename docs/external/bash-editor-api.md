@@ -529,7 +529,7 @@ bash-editor を ai-org-os から利用する際の留意点。ADR-0009 と整合
 
 ### 8.3. 外部リポジトリ
 
-- `local-multi-window-bash-editor`（本書の対象） — `C:\Users\kokoro068\git\local-multi-window-bash-editor`
+- `local-multi-window-bash-editor`（本書の対象、外部リポジトリ）
   - `server.js`（HTTP API + MCP server 実装）
   - `lib/pure.js`（依存ゼロの判定純粋関数群）
   - `lib/group-tree.js`（group 階層とアクセス制御）
