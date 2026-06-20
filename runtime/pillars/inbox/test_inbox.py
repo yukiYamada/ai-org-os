@@ -348,8 +348,8 @@ class TestClaimIssue(unittest.TestCase):
         self.assertEqual(rec.issue_id, issue_id)
         # inbox からは消えた
         self.assertFalse(path.exists())
-        # archive に移った（Windows の短いファイル名 KOKORO~1 と
-        # 通常の kokoro068 の表記揺れに耐えるため resolve() で正規化して比較）。
+        # archive に移った（Windows の短いファイル名形式と通常形式の表記揺れに
+        # 耐えるため resolve() で正規化して比較）。
         archived = (self.issues_dir / "archive" / f"{issue_id}.md").resolve()
         self.assertTrue(archived.exists())
         self.assertEqual(rec.path.resolve(), archived)

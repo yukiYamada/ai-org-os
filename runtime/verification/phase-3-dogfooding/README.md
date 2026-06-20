@@ -81,7 +81,7 @@ CI でも GitHub Actions が `runtime/**` 変更時に毎回回す。
 
 ### 前提
 
-- `C:\Users\kokoro068\git\local-multi-window-bash-editor` が手元にあり、Node.js 環境で `npm install` 済み
+- `local-multi-window-bash-editor` リポジトリが手元にあり、Node.js 環境で `npm install` 済み
 - bash-editor を起動できる: `node server.js` で Express + WebSocket がローカルポートを listen する想定
 
 ### 手順
