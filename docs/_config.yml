@@ -1,0 +1,41 @@
+title: ai-org-os
+description: 開発組織の不変項（公理系）を定義するフレームワーク
+theme: jekyll-theme-cayman
+markdown: kramdown
+
+plugins:
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
+
+# Navigation
+nav_links:
+  - title: Home
+    url: /
+  - title: ADRs
+    url: /adr/
+  - title: Architecture
+    url: /architecture-overview
+  - title: E2E Guide
+    url: /manual-e2e-guide
+  - title: GitHub
+    url: https://github.com/yukiYamada/ai-org-os
+
+# SEO
+lang: ja
+author: Yuki Yamada
+keywords: AI, framework, development organization, axiom, Claude Code
+
+# GitHub Pages
+baseurl: /ai-org-os
+url: https://yukiyamada.github.io
+
+# Exclude from processing
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
