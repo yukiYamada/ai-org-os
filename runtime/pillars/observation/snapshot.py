@@ -203,11 +203,12 @@ def prune_snapshots(
         if not entry.is_file():
             continue
         # *.json 本体は TTL 判定。
-        # *.json.tmp.* / *.tmp は write_snapshot の crash 残骸候補。
+        # *.json.tmp.* は write_snapshot の crash 残骸候補。
         # tmp は古さに関係なく削除対象（最新 write_snapshot が成功すれば即時 unlink される）。
         name = entry.name
         is_snapshot = entry.suffix == ".json"
-        is_tmp_residue = ".tmp" in name
+        # Stricter pattern to match only write_snapshot tmp format (#198)
+        is_tmp_residue = name.endswith(".tmp") or ".json.tmp." in name
         if not (is_snapshot or is_tmp_residue):
             continue
         try:
