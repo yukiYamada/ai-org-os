@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Phase 5g.B (#172) chunk 1+3: claude `--output-format json` を読んで mind_loop.cost
-event を emit、result text を stdout に出力するヘルパ。
+"""Phase 5g.B (#172) chunk 1+3+193: claude `--output-format json` を読んで
+mind_loop.cost / mind_loop.cycle_summary event を emit、result text を stdout に出力。
 
 mind-loop.sh から呼ばれる:
     python _parse_cost.py <json_input_file> <mind_name> <cycle> <event_log_path>
 
 挙動:
-  - json_input_file が読めない / parse 失敗 → exit 0 (= silent fail、cost event なし)
-  - parse 成功 → event_log_path に mind_loop.cost を append、result text を stdout
-  - cost event 書き込み失敗時も silent (Realm を止めない、ADR-0013 F3)
+  - json_input_file が読めない / parse 失敗 → exit 0 (= silent fail、event なし)
+  - parse 成功 → event_log_path に mind_loop.cost + mind_loop.cycle_summary を append、
+    result text を stdout
+  - event 書き込み失敗時も silent (Realm を止めない、ADR-0013 F3)
 
 Chunk 3 (#172): env `AI_ORG_OS_COST_WARN_USD` が正の値の場合、cost_usd が
 threshold を超えたら追加で `mind_loop.cost_warn` event を emit し、**exit 10**
 (= notify-human を促す signal) を返す。mind-loop.sh 側で _mindloop_notify を
 呼ぶ責務分け。
+
+#193: mind_loop.cycle_summary event を追加。cycle duration / num_turns / tokens を
+記録し、observe.py --tool-breakdown での集計に使う。per-tool-call latency は
+claude JSON に含まれないため、cycle 全体の summary のみ記録する段階的実装。
 """
 
 from __future__ import annotations
@@ -59,6 +64,28 @@ def _build_cost_event(data: dict, mind: str, cycle: int) -> dict:
     }
 
 
+def _build_cycle_summary_event(data: dict, mind: str, cycle: int) -> dict:
+    """#193: cycle duration / num_turns / tokens を記録する summary event。
+
+    observe.py --tool-breakdown での集計に使う。per-tool-call latency は
+    claude JSON に含まれないため、cycle 全体の summary のみ記録。
+    """
+    usage = data.get("usage") or {}
+    return {
+        "ts": _now_iso(),
+        "event": "mind_loop.cycle_summary",
+        "mind": mind,
+        "cycle": cycle,
+        "duration_api_ms": data.get("duration_api_ms", 0),
+        "num_turns": data.get("num_turns", 0),
+        "tokens": {
+            "input": usage.get("input_tokens", 0),
+            "output": usage.get("output_tokens", 0),
+        },
+        "is_error": bool(data.get("is_error")),
+    }
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 5:
         # 想定外の呼び出し方 → silent skip
@@ -96,12 +123,14 @@ def main(argv: list[str]) -> int:
             pass
         print(result_text)
 
-    # cost event を event_log に append
-    event = _build_cost_event(data, mind, cycle)
+    # cost event + cycle_summary event を event_log に append
+    cost_event = _build_cost_event(data, mind, cycle)
+    summary_event = _build_cycle_summary_event(data, mind, cycle)
     try:
         event_log.parent.mkdir(parents=True, exist_ok=True)
         with event_log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            f.write(json.dumps(cost_event, ensure_ascii=False) + "\n")
+            f.write(json.dumps(summary_event, ensure_ascii=False) + "\n")
     except OSError:
         # event 書き込み失敗時も Realm を止めない (ADR-0013 §1 F3)
         return 0

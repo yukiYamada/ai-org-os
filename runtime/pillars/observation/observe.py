@@ -17,6 +17,7 @@ Usage:
   python3 runtime/pillars/observation/observe.py --diff <prev> --against <curr>  # snapshot diff (#67)
   python3 runtime/pillars/observation/observe.py --for-warden  # integrated JSON (snapshot+flow+resource+anomaly, #68)
   python3 runtime/pillars/observation/observe.py --trace [--since 1h]  # JSONL event time-line (#122, ADR-0026)
+  python3 runtime/pillars/observation/observe.py --tool-breakdown <mind> [--slow-only]  # Per-cycle work breakdown (#193)
 
 See ADR-0009 for the design rationale (port pure logic only, no Web UI yet).
 v0.1 snapshot details: runtime/pillars/observation/ROADMAP.md §「Observation Pillar v0.1」.
@@ -529,6 +530,8 @@ def main(argv: list[str] | None = None) -> int:
     as_status = "--status" in argv
     as_chain = "--chain" in argv
     as_mermaid = "--mermaid" in argv
+    as_tool_breakdown = "--tool-breakdown" in argv
+    as_slow_only = "--slow-only" in argv
     diff_a = _parse_path_option(argv, "--diff")
     diff_b = _parse_path_option(argv, "--against")
 
@@ -567,6 +570,25 @@ def main(argv: list[str] | None = None) -> int:
     if as_chain:
         sys.path.insert(0, str(Path(__file__).parent))
         from chain import cmd_chain  # noqa: PLC0415
+
+        from_mind = _parse_str_option(argv, "--from")
+        since = _parse_str_option(argv, "--since")
+        return cmd_chain(from_mind=from_mind, since=since, as_mermaid=as_mermaid)
+
+    # Phase 5g.B #193: --tool-breakdown は mind_loop.cycle_summary event から
+    # per-cycle duration / num_turns を集計。--slow-only で slow cycle のみ表示。
+    if as_tool_breakdown:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from tool_breakdown import cmd_tool_breakdown  # noqa: PLC0415
+
+        mind = _parse_str_option(argv, "--mind")
+        if mind is None:
+            # --tool-breakdown の次の positional arg を mind として扱う
+            for i, arg in enumerate(argv):
+                if arg == "--tool-breakdown" and i + 1 < len(argv):
+                    mind = argv[i + 1]
+                    break
+        return cmd_tool_breakdown(mind=mind, slow_only=as_slow_only)
 
         from_mind = _parse_str_option(argv, "--from")
         since = _parse_str_option(argv, "--since")
