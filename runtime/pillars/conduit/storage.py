@@ -199,7 +199,7 @@ class Nexus:
         topic: str,
         body: str,
     ) -> dict[str, Any]:
-        _validate_mind_name(from_mind, "from_mind", is_mind_field=True)
+        _validate_mind_name(from_mind, "from_mind")
         _validate_mind_name(to_mind, "to_mind")
         if not isinstance(topic, str) or not topic.strip():
             raise ValueError("topic must be a non-empty string")
