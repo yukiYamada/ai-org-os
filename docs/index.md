@@ -5,21 +5,39 @@ title: ai-org-os
 
 # ai-org-os
 
-> **開発組織の不変項（公理系）を定義するフレームワーク**
+> **「開発組織そのものを git clone で配れる」フレームワーク**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](../CHANGELOG.md)
 
+## What problem does it solve?
+
+**既存の AI agent tools はこうだった**:
+- ❌ **個別の Skill を積み上げる** — 「コード書ける agent」「review できる agent」を個別に作る
+- ❌ **Framework を組み合わせる** — LangChain + AutoGPT + 自作 glue code で繋ぐ
+- ❌ **「誰がどこまで信頼できるか」が曖昧** — agent が main に直 push? レビューは誰?
+- ❌ **組織のルールが optional / best practice** — 「PR 経由で merge」は人間が覚えておく
+
+→ **結果**: 1人で使う便利 tool にはなるが、「組織として安全に委任できる単位」にはならない
+
+**ai-org-os はこうする**:
+- ✅ **組織そのものを配布単位にする** — Persona (役割) + Guild (枠) + Axiom (強制) を manifest 化
+- ✅ **Trust boundary を機械強制** — L1 (Mind 内部) / L2 (Mind 間通信) / L3 (外界) の境界を Axiom で守る
+- ✅ **Issue 投入 → PR 作成を無人化** — guildmaster (振り分け) → implementer (実装) → reviewer (査読) → 人間 (merge)
+- ✅ **`git clone` で組織を配れる** — 「うちの開発組織」を丸ごと配布・カスタマイズ可能
+
 ## What is ai-org-os?
 
-ai-org-os は「**開発組織そのものを git clone で配れる**」ことを可能にするフレームワークです。
+**開発組織の不変項（公理系）を定義・強制するフレームワーク**。
 
-- **Framework**: 開発組織の不変項（Axiom）を定義・強制する
 - **Realm**: Docker container として動作する仮想開発組織環境
-- **Mind**: 組織内で働く思考個体（claude プロセス）が動的に生成・作業・消滅する
-- **Warden**: Realm を監視し、必要に応じて Mind に働きかける世界そのもの
+- **Warden**: Realm を監視し、Mind に働きかける世界そのもの（観察→判断→働きかけループ）
+- **Mind**: 組織内で働く思考個体（claude プロセス）が Persona に従って動的に生成・作業・消滅
+- **Axiom**: 機械的に強制される不変項（例: claim-only-own-guild, trust-boundary）
 
 組織の構成（Persona / Guild / Workspace / Kind）を manifest として宣言することで、Issue 投入から PR 作成までを Mind が自律的に処理します。
+
+**Dogfooding 実績**: Issue 投入 → guildmaster 振り分け → alice claim → bob 実装 → carol review → **PR #154 が main に merge** (2026-06-03)
 
 ## Core Concepts
 
@@ -130,16 +148,46 @@ cd ai-org-os
 3. **境界付き委任**: Trust boundary で責務を明確化
 4. **デファクト候補ポジション**: 大手が真似して良いの作るなら歓迎
 
+## Why not just use subagents + skills?
+
+**「サブエージェント + skills で足りるのでは？」への回答**:
+
+ai-org-os は Claude のサブエージェント機能では実装できません。理由:
+
+| 観点 | サブエージェント + Skills | ai-org-os (Realm) |
+|---|---|---|
+| **存在** | 呼ばれた時だけ動いて消える | **24/7 永続的に動く** |
+| **能動性** | 受動的（親が呼ぶ） | **能動的（自発的に動く）** |
+| **ルール** | Anthropic / 親のルール下 | **独自ルール（Axiom）を機械強制** |
+| **通信** | 親経由のみ | **Mind 間で直接通信（Dispatch）** |
+| **記憶** | コンテキスト独立 | **Mindspace の不可侵原則がルール化** |
+
+具体例:
+- **サブエージェント**: 「レビューして」と呼ばれたら review して結果を返す → 親が終わったら消える
+- **ai-org-os**: Issue が投入されたら guildmaster が気付き → alice に振り分け → bob が実装 → carol が review → PR 作成 → 人間が merge（**親が居ない間も勝手に動く**）
+
+**「呼び出し可能な処理単位」と「住人として存在する主体」は質が違う**。
+
+ai-org-os = **AI 思考のための仮想空間（virtual world）**。Minecraft サーバーやメタバースに近い構造を、AI 開発組織の目的に特化させたもの。
+
+詳細: [ADR-0002 §10](adr/0002-vocabulary-and-meta-meta-structure.md)
+
 ## Differentiation
 
 既存の AI agent framework との違い:
 
-| 概念 | 従来 | ai-org-os |
+| 概念 | 従来 (LangChain / AutoGPT 等) | ai-org-os |
 |---|---|---|
-| 配布単位 | Skill（個） / Framework（道具） | **組織そのもの** |
-| 構成 | コード + config | **Manifest（公理＋宣言＋依存注入）** |
-| 強制 | optional / best practice | **Axiom（機械強制）** |
-| 境界 | 曖昧 | **Trust boundary（L1/L2/L3）** |
+| **配布単位** | Skill（個）/ Framework（道具） | **組織そのもの**（Persona + Guild + Axiom） |
+| **強制力** | optional / best practice | **Axiom（機械強制）** |
+| **信頼境界** | 曖昧（agent が何をやるか不明瞭） | **L1/L2/L3 明示**（Mind 内部 / Mind 間 / 外界） |
+| **責務分離** | 1 agent に全部やらせる | **役割分担**（振り分け / 実装 / 査読 / merge） |
+| **再現性** | prompt + code の組み合わせ | **Manifest + Framework versioning** |
+
+例: 「PR を main に直 push せず、必ず review 経由で merge」を守らせる
+
+- **従来**: prompt に書く → agent が守るかは運次第 → 事故ったら人間が気付いて直す
+- **ai-org-os**: Trust boundary axiom (ADR-0027) で L3 (main branch push) を機械強制 → Mind が PR 作成まで、人間が merge を担当
 
 ## Contributing
 
