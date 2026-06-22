@@ -200,7 +200,7 @@ class Nexus:
         body: str,
     ) -> dict[str, Any]:
         _validate_mind_name(from_mind, "from_mind", is_mind_field=True)
-        _validate_mind_name(to_mind, "to_mind", is_mind_field=True)
+        _validate_mind_name(to_mind, "to_mind")
         if not isinstance(topic, str) or not topic.strip():
             raise ValueError("topic must be a non-empty string")
         # axiom: topic は YAML frontmatter の単一行に literal で埋め込むため、
