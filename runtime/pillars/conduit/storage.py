@@ -61,9 +61,22 @@ MSG_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 RESERVED_MIND_NAMES = frozenset({"warden"})
 
 
-def _validate_mind_name(name: Any, field: str) -> None:
+def _validate_mind_name(name: Any, field: str, *, is_mind_field: bool = False) -> None:
+    """Validate Mind name format and optionally reject reserved names.
+
+    Args:
+        name: The name to validate
+        field: Field name for error messages
+        is_mind_field: If True, also reject RESERVED_MIND_NAMES (#197)
+    """
     if not isinstance(name, str) or not MIND_NAME_RE.match(name):
         raise ValueError(f"invalid {field}: must match {MIND_NAME_RE.pattern}")
+    if is_mind_field and name in RESERVED_MIND_NAMES:
+        raise ValueError(
+            f"invalid {field}: '{name}' is reserved for Realm senders "
+            f"(ADR-0024 §3). Mind names cannot use: "
+            f"{sorted(RESERVED_MIND_NAMES)}"
+        )
 
 
 def _reject_if_reserved_for_mind(name: str, field: str) -> None:

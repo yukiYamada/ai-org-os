@@ -100,16 +100,37 @@ def _count_messages(directory: Path) -> int:
 
 
 def _latest_mtime(mind_dir: Path) -> float:
-    """Find latest mtime anywhere in the Mindspace. Returns 0.0 if empty."""
+    """Find latest mtime anywhere in the Mindspace. Returns 0.0 if empty.
+
+    Symlinks are skipped to prevent dual-path inconsistency (same as
+    resource_usage._scan_dir_size). See #195 for security rationale.
+    """
     if not mind_dir.is_dir():
         return 0.0
     latest = 0.0
-    for entry in mind_dir.rglob("*"):
-        if entry.is_file():
-            try:
-                latest = max(latest, entry.stat().st_mtime)
-            except OSError:
-                continue
+    # iterative DFS to avoid recursion depth limit
+    stack: list[Path] = [mind_dir]
+    while stack:
+        cur = stack.pop()
+        try:
+            it = os.scandir(cur)
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_symlink():
+                        # skip symlinks to prevent DoS / time-side-channel
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                        continue
+                    if entry.is_file(follow_symlinks=False):
+                        st = entry.stat(follow_symlinks=False)
+                        latest = max(latest, st.st_mtime)
+                        continue
+                except OSError:
+                    continue
     return latest
 
 
