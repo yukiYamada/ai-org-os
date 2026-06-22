@@ -73,14 +73,15 @@ Primitive 完成度を上げ、他人が `git clone` で利用可能に。
 - **Framework versioning**: `runtime/VERSION` + `framework_version: ">=X.Y"` constraint
 - **Kind diversity**: `claude` / `deterministic` / `api` / `human` の 4 runtime
 
-### Phase 5g.B: 箱庭 v2 (進行中)
+### Phase 5g.B: 箱庭 v2 (✅ 完了 2026-06-22)
 
-物理基盤 + 観察強化。
+観察強化 + Security P2 完了。
 
-- **Observability** (✅): `observe.py --trace / --cost / --status / --chain`
-- **L3 notify**: 外部 push 通知（Slack webhook / email 等）
-- **Mindspace persistence**: `kill-mind --preserve` + `spawn-mind --restore-from`
-- **WSL/Linux 移行** (進行中): OS-level sandbox + 本旨 Linux/Docker 前提との整合
+- **Observability** (✅): `observe.py --trace / --cost / --status / --chain / --tool-breakdown`
+- **L3 notify** (✅): 外部 push 通知（`AI_ORG_OS_NOTIFY_CMD` env）
+- **Mindspace persistence** (✅): `kill-mind --preserve` + `spawn-mind --restore-from`
+- **Security P2** (✅): symlink skip / /proc fallback 厳格化 / reserved name 二重防御 / .tmp 判定厳密化 / orphan sweep argv 削除
+- **残タスク** (独立): WSL/Linux 移行 (#108)、cycle outlier RCA (#134)
 
 ## Quick Start
 
@@ -138,7 +139,7 @@ cd ai-org-os
 - ✅ **Phase 5a-5e** (〜2026-05-30): 不変項フレームワーク + Warden 双方向 outer loop
 - ✅ **Phase 5f** (〜2026-06-03): Mind に任せられる Realm（多 Mind + 実 PR + 失敗扱い）
 - ✅ **Phase 5g.A** (〜2026-06-09): Framework foundation v2（composition + schema + versioning + Kind diversity）
-- 🚧 **Phase 5g.B** (進行中): 箱庭 v2（物理基盤 + 観察強化）
+- ✅ **Phase 5g.B** (〜2026-06-22): 箱庭 v2（観察強化 + Security P2）
 - 📋 **Phase 6** (未定): Public release + 外部利用者 onboarding
 
 ## Design Philosophy
@@ -205,4 +206,4 @@ ai-org-os = **AI 思考のための仮想空間（virtual world）**。Minecraft
 
 ---
 
-*Last updated: 2026-06-20 (Phase 5g.B)*
+*Last updated: 2026-06-22 (Phase 5g 完了)*
