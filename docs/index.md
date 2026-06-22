@@ -148,6 +148,30 @@ cd ai-org-os
 3. **境界付き委任**: Trust boundary で責務を明確化
 4. **デファクト候補ポジション**: 大手が真似して良いの作るなら歓迎
 
+## Why not just use subagents + skills?
+
+**「サブエージェント + skills で足りるのでは？」への回答**:
+
+ai-org-os は Claude のサブエージェント機能では実装できません。理由:
+
+| 観点 | サブエージェント + Skills | ai-org-os (Realm) |
+|---|---|---|
+| **存在** | 呼ばれた時だけ動いて消える | **24/7 永続的に動く** |
+| **能動性** | 受動的（親が呼ぶ） | **能動的（自発的に動く）** |
+| **ルール** | Anthropic / 親のルール下 | **独自ルール（Axiom）を機械強制** |
+| **通信** | 親経由のみ | **Mind 間で直接通信（Dispatch）** |
+| **記憶** | コンテキスト独立 | **Mindspace の不可侵原則がルール化** |
+
+具体例:
+- **サブエージェント**: 「レビューして」と呼ばれたら review して結果を返す → 親が終わったら消える
+- **ai-org-os**: Issue が投入されたら guildmaster が気付き → alice に振り分け → bob が実装 → carol が review → PR 作成 → 人間が merge（**親が居ない間も勝手に動く**）
+
+**「呼び出し可能な処理単位」と「住人として存在する主体」は質が違う**。
+
+ai-org-os = **AI 思考のための仮想空間（virtual world）**。Minecraft サーバーやメタバースに近い構造を、AI 開発組織の目的に特化させたもの。
+
+詳細: [ADR-0002 §10](adr/0002-vocabulary-and-meta-meta-structure.md)
+
 ## Differentiation
 
 既存の AI agent framework との違い:
